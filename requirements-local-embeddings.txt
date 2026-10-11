@@ -1,0 +1,2 @@
+# Opcional: embeddings locales (gratis, sin API key). Descarga PyTorch (~varios cientos de MB).
+sentence-transformers>=3.0
