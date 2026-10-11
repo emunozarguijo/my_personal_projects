@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mis estados de cuenta</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Figtree:wght@400..700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+<div class="shell" id="shell">
+  <aside class="rail" aria-label="Estados de cuenta cargados">
+    <div class="rail-head">
+      <div class="brand">Mis estados de cuenta</div>
+      <div class="brand-sub">Entiende tu tarjeta, mes a mes.</div>
+    </div>
+    <button class="drop" id="drop" type="button">
+      <strong>Cargar estados de cuenta</strong>
+      <span>Arrastra uno o varios PDFs, o haz clic para elegirlos</span>
+    </button>
+    <input type="file" id="file" accept=".pdf,application/pdf" multiple hidden>
+    <nav class="months" id="months"></nav>
+  </aside>
+
+  <main class="main">
+    <section class="welcome">
+      <div>
+        <h1>Empieza con tu estado de cuenta</h1>
+        <p>Carga el PDF de tu tarjeta. Verás cuánto pagar y cuándo, en qué gastaste y podrás hacerle preguntas. Cada mes que cargues se suma a tu historial.</p>
+        <button class="btn" id="welcome-btn" type="button">Elegir PDF</button>
+      </div>
+    </section>
+
+    <header class="top">
+      <div class="top-text">
+        <h1 id="title"></h1>
+        <div class="meta" id="meta"></div>
+      </div>
+      <button class="icon-btn" id="del" type="button">Eliminar este mes</button>
+    </header>
+
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" data-tab="resumen" aria-selected="true">Resumen</button>
+      <button class="tab" role="tab" data-tab="movimientos" aria-selected="false">Movimientos</button>
+      <button class="tab" role="tab" data-tab="preguntar" aria-selected="false">Preguntar</button>
+      <button class="tab" role="tab" data-tab="metricas" aria-selected="false">Métricas</button>
+    </div>
+
+    <section class="view" id="v-resumen"></section>
+    <section class="view" id="v-movimientos" hidden></section>
+    <section class="view view--chat" id="v-preguntar" hidden>
+      <div class="chat-scroll" id="chat" aria-live="polite"></div>
+      <form class="composer" id="composer">
+        <textarea id="q" rows="1" placeholder="Escribe tu pregunta sobre este mes" aria-label="Tu pregunta"></textarea>
+        <button class="btn" id="send" type="submit">Enviar</button>
+      </form>
+    </section>
+    <section class="view" id="v-metricas" hidden></section>
+  </main>
+</div>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<script src="/static/js/helpers.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>
