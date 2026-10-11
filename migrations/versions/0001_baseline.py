@@ -35,6 +35,10 @@ def upgrade() -> None:
     dim = context.config.attributes["settings"].embedding_dim
     now = sa.text("now()")
 
+    # BD nueva (CI, otro proveedor): instala pgvector. Solo si falta, porque en Neon el usuario no puede crearla.
+    if not op.get_bind().execute(sa.text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")).scalar():
+        op.execute("CREATE EXTENSION vector")
+
     op.create_table(
         "statements",
         sa.Column("id", sa.Integer, primary_key=True),
