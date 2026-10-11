@@ -23,3 +23,15 @@ class EmbeddingError(AppError):
 
 class LLMError(AppError):
     """Falló la llamada al proveedor de LLM."""
+
+
+class AuthError(AppError):
+    """Credenciales inválidas, registro rechazado o sesión inexistente."""
+
+
+class RateLimitedError(AppError):
+    """Demasiados intentos fallidos de inicio de sesión."""
+
+
+class QuotaExceededError(AppError):
+    """El usuario alcanzó un límite de uso (preguntas o cargas por día, estados de cuenta guardados)."""

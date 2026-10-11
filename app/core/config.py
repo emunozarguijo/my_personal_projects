@@ -59,6 +59,35 @@ class Settings(BaseSettings):
     max_pdf_mb: int = 20
     upload_dir: Path = Path("archivos_subidos")
 
+    # Cuentas y sesiones
+    session_ttl_hours: int = 24 * 7
+    cookie_secure: bool | None = None       # None → True en prod (HTTPS), False en dev
+    signup_invite_code: SecretStr | None = None   # si está definido, el registro lo exige
+    login_max_attempts: int = 5
+    login_window_minutes: int = 15
+    local_user: str = "local"               # usuario con el que operan la GUI y la CLI
+    admin_username: str = "admin"           # dueño de los datos previos a la migración multiusuario
+    admin_password: SecretStr | None = None
+    expose_docs: bool | None = None         # None → /docs solo fuera de prod
+
+    # Límites de uso (0 = sin límite)
+    max_users: int = 50
+    max_statements_per_user: int = 24
+    max_asks_per_day: int = 30
+    max_uploads_per_day: int = 10
+
+    @property
+    def is_prod(self) -> bool:
+        return self.app_env == "prod"
+
+    @property
+    def secure_cookies(self) -> bool:
+        return self.is_prod if self.cookie_secure is None else self.cookie_secure
+
+    @property
+    def docs_enabled(self) -> bool:
+        return not self.is_prod if self.expose_docs is None else self.expose_docs
+
     @property
     def sqlalchemy_url(self) -> str | URL:
         if self.database_url:

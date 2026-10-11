@@ -5,6 +5,7 @@ const state={statements:[],selected:null,detail:null,tab:'resumen',filter:'all',
 async function api(path,opts){
   const r=await fetch(path,opts);
   let data=null;try{data=await r.json();}catch(e){}
+  if(r.status===401&&!path.startsWith('/auth/')){onSessionExpired();throw new Error('Tu sesión terminó. Vuelve a entrar.');}
   if(!r.ok){
     const d=data&&data.detail;
     throw new Error(typeof d==='string'?d:Array.isArray(d)?d.map(x=>x.msg).join('; '):'No se pudo completar la acción ('+r.status+').');
@@ -247,12 +248,13 @@ $('#chat').addEventListener('click',e=>{const c=e.target.closest('.chip');if(c)a
 async function loadMetrics(){
   const box=$('#v-metricas');
   try{
-    const [stats,recent]=await Promise.all([api('/metrics'),api('/metrics/recent?limit=15')]);
+    const scope=state.user&&state.user.role==='admin'?'all':'me';
+    const [stats,recent]=await Promise.all([api('/metrics?scope='+scope),api('/metrics/recent?limit=15&scope='+scope)]);
     const calls=stats.reduce((s,x)=>s+x.calls,0),errors=stats.reduce((s,x)=>s+x.errors,0);
     const tin=stats.reduce((s,x)=>s+x.input_tokens,0),tout=stats.reduce((s,x)=>s+x.output_tokens,0);
     const cost=stats.reduce((s,x)=>s+x.cost_usd,0);
     const chat=stats.find(x=>x.operation==='chat');
-    let h='<div class="strip">'
+    let h=(scope==='all'?'<p class="small">Vista de administrador: métricas de todas las cuentas.</p>':'')+'<div class="strip">'
       +'<div><div class="big">'+calls+'</div><div class="small">llamadas registradas'+(errors?', '+errors+' con error':'')+'</div></div>'
       +'<div><div class="big">'+(chat?(chat.avg_latency_ms/1000).toFixed(1)+' s':'N/D')+'</div><div class="small">tiempo promedio de una respuesta</div></div>'
       +'<div><div class="big">'+(tin+tout).toLocaleString('es-MX')+'</div><div class="small">tokens ('+tin.toLocaleString('es-MX')+' de entrada, '+tout.toLocaleString('es-MX')+' de salida)</div></div>'
@@ -314,5 +316,3 @@ $('#del').addEventListener('click',async()=>{
   try{await api('/statements/'+d.id,{method:'DELETE'});delete state.chats[d.id];toast(monthTitle(d.period_end)+' eliminado.','ok');state.selected=null;await loadStatements();}
   catch(e){toast(e.message,'bad');}
 });
-
-loadStatements();

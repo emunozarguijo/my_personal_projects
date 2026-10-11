@@ -1,4 +1,4 @@
-"""Engine, sesiones e inicialización del esquema."""
+"""Engine, sesiones y verificación del esquema (las tablas las crea Alembic: python -m app.migrate)."""
 from __future__ import annotations
 
 import logging
@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
 from app.core.exceptions import ConfigurationError
-from app.core.models import Base
 
 logger = logging.getLogger(__name__)
 
@@ -41,14 +40,21 @@ class Database:
         finally:
             session.close()
 
-    def init_schema(self) -> None:
-        self._ensure_vector_extension()
-        self._ensure_schema_exists()
-        with self.engine.begin() as conn:
-            Base.metadata.create_all(conn)
-        logger.info("Esquema de base de datos listo (schema=%s)", self._schema or "por defecto")
+    def verify_ready(self, expected_revision: str) -> None:
+        """Falla con un mensaje claro si el esquema no existe o le faltan migraciones."""
+        self.ensure_schema_exists()
+        table = f'"{self._schema}".alembic_version' if self._schema else "alembic_version"
+        with self.engine.connect() as conn:
+            exists = conn.execute(text("SELECT to_regclass(:t)"), {"t": table}).scalar()
+            current = conn.execute(text(f"SELECT version_num FROM {table}")).scalar() if exists else None
+        if current != expected_revision:
+            raise ConfigurationError(
+                f"La base de datos está en la revisión {current or 'ninguna'} y la app necesita "
+                f"{expected_revision}. Ejecuta: python -m app.migrate"
+            )
+        logger.info("Esquema de base de datos listo (schema=%s, revisión=%s)", self._schema or "por defecto", current)
 
-    def _ensure_schema_exists(self) -> None:
+    def ensure_schema_exists(self) -> None:
         """Falla con un mensaje claro (a qué BD se conectó y qué esquemas ve) si DB_SCHEMA no existe."""
         if not self._schema:
             return
@@ -74,7 +80,7 @@ class Database:
             "(o DATABASE_URL, que tiene prioridad)."
         )
 
-    def _ensure_vector_extension(self) -> None:
+    def ensure_vector_extension(self) -> None:
         with self.engine.connect() as conn:
             if conn.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")).scalar():
                 return

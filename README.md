@@ -4,13 +4,16 @@ Cargas el PDF del estado de cuenta de tu tarjeta (formato **Nu México**); la ap
 **PostgreSQL + pgvector** y te deja hacerle preguntas a un LLM que responde usando como contexto lo recuperado de la
 base de datos (**RAG**). Registra **logs, latencia, tokens, costo y errores** de cada llamada.
 
+Es **multiusuario**: cada persona crea su cuenta con usuario y contraseña desde la URL de la app (con un código de
+invitación opcional) y solo ve sus propios estados de cuenta, preguntas y métricas.
+
 Se usa de tres formas, todas sobre el mismo código y la misma base de datos:
 
 | Modo | Comando |
 |---|---|
-| Web (FastAPI + frontend) | `uvicorn app.api:app --reload` → http://127.0.0.1:8000 (Swagger en `/docs`) |
-| Escritorio (Tkinter) | `python -m app.main` |
-| Terminal | `python -m app.main --ingest estado.pdf` · `--ask "¿Cuánto debo pagar?"` · `--stats` |
+| Web (FastAPI + frontend), multiusuario | `uvicorn app.api:app --reload` → http://127.0.0.1:8000 (Swagger en `/docs`) |
+| Escritorio (Tkinter) | `python -m app.main` (opera como `LOCAL_USER`) |
+| Terminal | `python -m app.main --ingest estado.pdf` · `--ask "¿Cuánto debo pagar?"` · `--stats` · `--user ana` |
 
 En producción corre la versión web en **Render** (plan free) con la base de datos en **Neon** (plan free).
 
@@ -26,8 +29,10 @@ flowchart TB
         GUI["app/ui/gui.py<br/>Tkinter"]
         CLI["app/main.py<br/>CLI"]
     end
-    FE -- "fetch /ask, /statements, ..." --> API
-    API & GUI & CLI --> FACADE["services/assistant.py<br/>StatementAssistant (fachada)"]
+    FE -- "cookie de sesión + fetch" --> API
+    API -- "current_user" --> AUTH["services/auth.py<br/>AuthService"]
+    AUTH --> REPO
+    API & GUI & CLI -- "user_id" --> FACADE["services/assistant.py<br/>StatementAssistant (fachada)"]
     FACADE --> PIPE["pipeline/<br/>grafos LangGraph"]
     PIPE --> SVC["services/<br/>parser · chunking · embeddings · retrieval · llm · metrics"]
     SVC --> REPO["services/repository.py<br/>única capa con SQLAlchemy"]
@@ -44,6 +49,28 @@ flowchart TB
   reemplazar o probar por separado.
 - **El frontend está separado del backend** (`frontend/`), pero FastAPI lo sirve desde el mismo servicio: en
   producción es un solo deploy, sin CORS.
+
+### Multiusuario (tenant = usuario)
+
+```mermaid
+flowchart LR
+    B[Navegador] -- "cookie HttpOnly<br/>(token aleatorio)" --> D["current_user<br/>sha256(token) → user_sessions"]
+    D -- "user.id" --> F[StatementAssistant]
+    F -- "WHERE user_id = :id" --> R[(statements · document_chunks · api_metrics)]
+```
+
+- **Aislamiento:** `statements`, `document_chunks` y `api_metrics` tienen `user_id`. Todo método del repositorio
+  recibe `user_id` y lo pone en el `WHERE`; la búsqueda vectorial filtra por usuario. Un estado de cuenta de otra
+  persona responde **404** (igual que uno inexistente), sin revelar que existe.
+- **El `user_id` nunca viene del cliente:** la API lo toma de la sesión. La GUI y la CLI usan
+  `assistant.for_user(id)`, con el usuario `LOCAL_USER`.
+- **Duplicados por cuenta:** el mismo PDF puede cargarse en cuentas distintas (`UNIQUE(user_id, file_hash)`).
+- **Contraseñas:** Argon2 (`pwdlib`). **Sesiones:** token aleatorio en cookie `HttpOnly; SameSite=Lax`
+  (`Secure` en prod); en la BD solo se guarda su SHA-256. Duran `SESSION_TTL_HOURS` y se renuevan solas mientras
+  se usen. Cambiar la contraseña cierra las demás sesiones.
+- **Abuso:** límite de intentos de login por usuario e IP, mismo mensaje y tiempo exista o no el usuario, verificación
+  de `Origin` en peticiones que modifican datos (CSRF), código de invitación y cuotas diarias por cuenta.
+- **Roles:** `user` y `admin`. El admin puede ver las métricas de todas las cuentas (`?scope=all`).
 
 ### Flujos (LangGraph)
 
@@ -66,14 +93,15 @@ flowchart LR
 
 ```
 ├── app/
-│   ├── main.py            # CLI + arranque de la GUI
-│   ├── api.py             # FastAPI: endpoints REST + sirve frontend/
+│   ├── main.py            # CLI + arranque de la GUI + administración de cuentas
+│   ├── api.py             # FastAPI: cuentas, endpoints REST protegidos + sirve frontend/
+│   ├── migrate.py         # python -m app.migrate: aplica migraciones (Alembic)
 │   ├── container.py       # Composition root: crea y conecta todas las dependencias
 │   ├── schemas.py         # Contratos pydantic (ParsedStatement, Chunk, LLMResponse, ...)
 │   ├── core/
 │   │   ├── config.py      # Settings + secretos (.env / variables de entorno, SecretStr)
-│   │   ├── database.py    # Engine, sesiones, pgvector, verificación del esquema
-│   │   ├── models.py      # ORM: statements, transactions, installments, document_chunks (vector), api_metrics
+│   │   ├── database.py    # Engine, sesiones, pgvector, verificación de esquema y revisión
+│   │   ├── models.py      # ORM: users, user_sessions, statements, transactions, installments, document_chunks, api_metrics
 │   │   ├── logging.py     # Logs JSON (logs/app.jsonl) + request_id por operación
 │   │   ├── prompts.py     # System prompt y armado del contexto
 │   │   └── exceptions.py
@@ -84,8 +112,9 @@ flowchart LR
 │   │   ├── retrieval.py   # Embedding de la pregunta + búsqueda pgvector (coseno) + resumen siempre
 │   │   ├── llm.py         # Proveedores: anthropic | openai, con métricas
 │   │   ├── metrics.py     # MetricsService + Stopwatch (latencia, tokens, costo)
-│   │   ├── repository.py  # Única capa que conoce SQLAlchemy
-│   │   └── assistant.py   # Fachada para API / GUI / CLI
+│   │   ├── repository.py  # Única capa que conoce SQLAlchemy (siempre filtra por user_id)
+│   │   ├── auth.py        # AuthService: registro, login, sesiones, límite de intentos
+│   │   └── assistant.py   # Fachada para API / GUI / CLI + cuotas de uso
 │   ├── pipeline/          # LangGraph
 │   │   ├── state.py       # IngestionState, QAState
 │   │   ├── nodes.py       # IngestionNodes, QANodes (clases con dependencias inyectadas)
@@ -96,8 +125,11 @@ flowchart LR
 │   ├── css/styles.css     # Estilos
 │   └── js/
 │       ├── helpers.js     # Formato de fechas, moneda, escape de HTML
-│       └── app.js         # Estado, llamadas a la API y renderizado
-├── tests/                 # pytest, sin BD ni APIs (dobles en fakes.py)
+│       ├── app.js         # Estado, llamadas a la API y renderizado
+│       └── auth.js        # Entrar / crear cuenta / salir / cambiar contraseña; arranque
+├── migrations/            # Alembic: 0001 esquema base, 0002 multiusuario
+├── alembic.ini
+├── tests/                 # pytest: dobles en fakes.py; test_db.py usa PostgreSQL real
 ├── .github/workflows/ci-cd.yml   # Tests en cada push; deploy a Render desde main
 ├── render.yaml            # Blueprint de Render (plan free)
 ├── requirements.txt       # Dependencias de la app (versiones fijas)
@@ -107,17 +139,24 @@ flowchart LR
 
 ### API web
 
+Todas las rutas de datos requieren sesión (si no, **401**) y operan solo sobre la cuenta en sesión.
+
 | Método | Ruta | Qué hace |
 |---|---|---|
-| `GET` | `/` | Interfaz web (`frontend/index.html`) |
-| `GET` | `/health` | Health check (lo usa Render) |
-| `POST` | `/upload-pdf/` | Sube y procesa un PDF (grafo de ingesta) |
+| `GET` | `/` | Interfaz web (`frontend/index.html`) — pública |
+| `GET` | `/health` | Health check (lo usa Render) — pública |
+| `GET` | `/auth/config` | ¿El registro pide código de invitación? — pública |
+| `POST` | `/auth/register` | Crea la cuenta e inicia sesión — pública |
+| `POST` | `/auth/login` · `/auth/logout` | Inicia / cierra sesión |
+| `GET` | `/auth/me` | Usuario en sesión |
+| `POST` | `/auth/password` | Cambia la contraseña (cierra las demás sesiones) |
+| `POST` | `/upload-pdf/` | Sube y procesa un PDF (grafo de ingesta); **429** si se excede la cuota |
 | `GET` | `/statements` | Lista los estados de cuenta cargados |
 | `GET` | `/statements/{id}` | Detalle: resumen, movimientos, compras a meses |
 | `GET` | `/statements/{id}/overview` | Resumen en texto |
 | `DELETE` | `/statements/{id}` | Elimina un estado de cuenta |
-| `POST` | `/ask` | Pregunta (grafo RAG) |
-| `GET` | `/metrics` · `/metrics/recent` | Métricas agregadas y últimas llamadas |
+| `POST` | `/ask` | Pregunta (grafo RAG); **429** si se excede la cuota |
+| `GET` | `/metrics` · `/metrics/recent` | Métricas propias; `?scope=all` (solo admin) de todas las cuentas |
 
 ## Puesta en marcha local
 
@@ -129,7 +168,8 @@ python -m venv .venv && source .venv/bin/activate          # Windows: .venv\Scri
 pip install -r requirements-dev.txt
 pip install -r requirements-local-embeddings.txt            # solo si usarás EMBEDDING_PROVIDER=local
 # crea .env con las variables de la tabla de abajo
-python -m app.main --init-db                                # crea extensión y tablas
+python -m app.migrate                                       # crea / actualiza las tablas (Alembic)
+python -m app.main --create-user tu_usuario --admin         # opcional: tu cuenta de admin
 uvicorn app.api:app --reload                                # o: python -m app.main (GUI)
 ```
 
@@ -154,7 +194,26 @@ Ejecuta los comandos desde la carpeta raíz del proyecto (donde está este READM
 | `EMBEDDING_DIM` | `384` | `1536` con `text-embedding-3-small` |
 | `REDACT_PII` | `true` | Oculta dirección, CLABE, RFC y nombre antes de enviar texto al LLM |
 | `PRICE_INPUT_PER_MTOK` / `PRICE_OUTPUT_PER_MTOK` | `0` | USD por millón de tokens, para estimar costo |
-| `APP_ENV` · `LOG_LEVEL` · `LOG_DIR` · `UPLOAD_DIR` | `dev` · `INFO` · `logs` · `archivos_subidos` | |
+| `APP_ENV` · `LOG_LEVEL` · `LOG_DIR` · `UPLOAD_DIR` | `dev` · `INFO` · `logs` · `archivos_subidos` | Con `prod`: cookies `Secure` y sin `/docs` |
+| `SIGNUP_INVITE_CODE` | `<código>` | Si está definido, el registro lo exige. **Recomendado** al compartir la URL |
+| `SESSION_TTL_HOURS` | `168` | Duración de la sesión (se renueva con el uso) |
+| `MAX_USERS` · `MAX_STATEMENTS_PER_USER` | `50` · `24` | `0` = sin límite |
+| `MAX_ASKS_PER_DAY` · `MAX_UPLOADS_PER_DAY` | `30` · `10` | Por cuenta, día UTC. `0` = sin límite |
+| `LOGIN_MAX_ATTEMPTS` · `LOGIN_WINDOW_MINUTES` | `5` · `15` | Intentos fallidos antes de bloquear |
+| `LOCAL_USER` | `local` | Usuario con el que operan la GUI y la CLI |
+| `ADMIN_USERNAME` · `ADMIN_PASSWORD` | `admin` · — | Dueño de los datos previos a la migración multiusuario (solo se usan en ella) |
+| `COOKIE_SECURE` · `EXPOSE_DOCS` | — | Para forzar el comportamiento de cookies / `/docs` sin depender de `APP_ENV` |
+
+### Cuentas desde la terminal
+
+```bash
+python -m app.main --create-user ana [--admin]   # pide la contraseña sin mostrarla
+python -m app.main --reset-password ana          # "olvidé mi contraseña": la cambia y cierra sus sesiones
+python -m app.main --set-role ana admin
+python -m app.main --user ana --ask "¿Cuánto debo pagar?"
+```
+
+No hay recuperación de contraseña por correo: el admin la restablece con `--reset-password`.
 
 Si `--init-db` dice que pgvector no existe, ejecuta `CREATE EXTENSION vector;` en la consola SQL de Neon.
 
@@ -183,15 +242,29 @@ flowchart LR
 - **`.github/workflows/ci-cd.yml`**: en cada push y PR instala `requirements-dev.txt`, verifica que la app importa y
   corre `pytest`. Solo en push a `main` y con tests verdes, llama al Deploy Hook de Render.
 - **`render.yaml`**: servicio web `free`, región `virginia` (cerca de Neon us-east-1), `autoDeploy: false` (el deploy
-  lo decide CI), health check en `/health`, `EMBEDDING_PROVIDER=fake`.
+  lo decide CI), health check en `/health`, `EMBEDDING_PROVIDER=fake`. Al arrancar ejecuta `python -m app.migrate`
+  (el plan free no tiene *pre-deploy command*) y luego uvicorn con `--proxy-headers` para conocer la IP real.
+- **CI** tiene dos jobs de pruebas: con dobles (`test`) y con PostgreSQL + pgvector real como *service container*
+  (`test-db`: migraciones y filtros por usuario en SQL). El deploy espera a ambos.
 
 **Configuración inicial (una vez):**
 
 1. Render → **New → Blueprint** → elige el repo. Captura los valores marcados como `sync: false`
-   (`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SCHEMA`, `ANTHROPIC_API_KEY`), sin comillas.
+   (`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SCHEMA`, `ANTHROPIC_API_KEY`, `SIGNUP_INVITE_CODE`,
+   `ADMIN_USERNAME`, `ADMIN_PASSWORD`), sin comillas.
 2. Render → servicio web → **Settings → Build & Deploy → Deploy Hook**: copia la URL
    (no confundir con el *Sync Hook* del Blueprint).
 3. GitHub → **Settings → Secrets and variables → Actions** → secret `RENDER_DEPLOY_HOOK_URL` con esa URL.
+
+**Migración a multiusuario de una BD que ya tiene datos (una sola vez):**
+
+1. Respáldala: en Neon crea una *branch* de la base (gratis) antes del primer deploy multiusuario.
+2. Define `ADMIN_USERNAME` y `ADMIN_PASSWORD` (en Render o en tu `.env`): esa cuenta admin queda como dueña de los
+   estados de cuenta y métricas existentes.
+3. Despliega (o corre `python -m app.migrate` localmente). La migración detecta las tablas previas a Alembic, las marca
+   como `0001_baseline` y aplica `0002_multitenant`.
+4. Entra con esa cuenta. Si no definiste `ADMIN_PASSWORD`, ponle una con `python -m app.main --reset-password <usuario>`.
+5. Comparte la URL y el `SIGNUP_INVITE_CODE`. Pon también un tope de gasto mensual en la consola de Anthropic.
 
 **Limitaciones del plan free:** el servicio se duerme tras 15 min sin uso (la primera visita tarda ~30–60 s) y el
 disco es efímero: los PDFs subidos se pierden al reiniciar, pero los datos procesados quedan en Neon.
@@ -202,6 +275,7 @@ disco es efímero: los PDFs subidos se pierden al reiniciar, pero los datos proc
 - `.env`, `.env.*`, los PDFs, `archivos_subidos/` y `logs/` están en `.gitignore`. **Nunca** los subas.
 - En Render los secretos van en *Environment*; en GitHub, solo `RENDER_DEPLOY_HOOK_URL` como secret de Actions.
 - Si una clave se expone (chat, captura, commit), revócala y genera otra.
+- Las contraseñas de las cuentas nunca se guardan ni se registran en logs; solo su hash Argon2.
 
 ## Observabilidad
 
@@ -228,6 +302,10 @@ Consulta de ejemplo: `SELECT operation, avg(latency_ms), sum(input_tokens), sum(
 - **Arranque seguro:** si `DB_SCHEMA` no existe, la app falla indicando a qué base, usuario y host se conectó, en
   lugar de crear tablas en un lugar equivocado.
 - **Versiones fijas** en `requirements*.txt`: CI, Render y tu PC instalan exactamente lo mismo.
+- **Migraciones con Alembic** (no `create_all`): la app verifica al arrancar que la BD esté en la última revisión y,
+  si no, pide ejecutar `python -m app.migrate`.
+- **Sesiones en BD en lugar de JWT:** se pueden revocar (logout real, cambio de contraseña) y no requieren secretos
+  extra que rotar.
 
 ## Pruebas
 
@@ -238,6 +316,13 @@ pytest
 
 `tests/test_parser.py` y `tests/test_chunking.py` usan un texto anonimizado (`tests/fixtures/nu_statement_sample.txt`).
 `tests/test_pipeline.py` ejecuta ambos grafos completos con dobles (`tests/fakes.py`): sin PostgreSQL ni APIs.
+`tests/test_auth.py` cubre registro, contraseñas, sesiones (con reloj simulado) y límite de intentos.
+`tests/test_api.py` levanta la API con dos cuentas y verifica aislamiento (404 cruzados), cuotas (429), CSRF y sesiones.
+`tests/test_db.py` corre las migraciones y los filtros por usuario contra PostgreSQL real:
+
+```bash
+RUN_DB_TESTS=1 DB_SCHEMA=<esquema vacío> pytest tests/test_db.py   # se niega a correr si el esquema tiene datos
+```
 
 ## Limitaciones conocidas
 
@@ -245,3 +330,5 @@ pytest
 - PDFs escaneados (imagen) no funcionan: haría falta OCR.
 - Las tarjetas adicionales / varias tarjetas en un mismo PDF no se distinguen.
 - En Render free la búsqueda usa embeddings `fake` (por palabras clave), menos precisa que la semántica local.
+- El límite de intentos de login vive en memoria: se reinicia con el servicio y supone una sola instancia.
+- Sin recuperación de contraseña por correo ni borrado de cuenta en la interfaz (los hace el admin desde la terminal).

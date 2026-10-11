@@ -180,3 +180,28 @@ class ApiCallRecord(BaseModel):
     input_tokens: int
     output_tokens: int
     request_id: str
+
+
+class UserAccount(BaseModel):
+    """Cuenta tal como sale del repositorio (uso interno: incluye el hash de la contraseña)."""
+
+    id: int
+    username: str
+    role: str = "user"
+    is_active: bool = True
+    password_hash: str | None = None
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == "admin"
+
+    def public(self) -> "UserPublic":
+        return UserPublic(id=self.id, username=self.username, role=self.role)
+
+
+class UserPublic(BaseModel):
+    """Lo único de una cuenta que sale por la API."""
+
+    id: int
+    username: str
+    role: str

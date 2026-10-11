@@ -1,18 +1,27 @@
-"""Acceso a datos (PostgreSQL + pgvector). Es la única capa que conoce SQLAlchemy."""
+"""Acceso a datos (PostgreSQL + pgvector). Es la única capa que conoce SQLAlchemy.
+
+Aislamiento multiusuario: todo método que lee o escribe datos de un usuario recibe `user_id` como primer
+argumento y lo usa en el WHERE. Un registro de otro usuario se trata igual que uno inexistente.
+"""
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 
 from app.core.database import Database
+from app.core.exceptions import AuthError
 from app.core.models import (
     ApiMetric,
     DocumentChunk,
     InstallmentRow,
     Statement,
     TransactionRow,
+    User,
+    UserSession,
 )
 from app.schemas import (
     ApiCallRecord,
@@ -24,6 +33,7 @@ from app.schemas import (
     StatementDetail,
     StatementSummary,
     Transaction,
+    UserAccount,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,18 +46,25 @@ _STATEMENT_FIELDS = (
 ).split()
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class StatementRepository:
     def __init__(self, db: Database):
         self.db = db
 
     # ------------------------------------------------------------- statements
-    def find_by_hash(self, file_hash: str) -> int | None:
+    def find_by_hash(self, user_id: int, file_hash: str) -> int | None:
         with self.db.session() as s:
-            return s.scalar(select(Statement.id).where(Statement.file_hash == file_hash))
+            return s.scalar(
+                select(Statement.id).where(Statement.user_id == user_id, Statement.file_hash == file_hash)
+            )
 
-    def save_statement(self, parsed: ParsedStatement, file_hash: str, filename: str) -> int:
+    def save_statement(self, user_id: int, parsed: ParsedStatement, file_hash: str, filename: str) -> int:
         with self.db.session() as s:
             row = Statement(
+                user_id=user_id,
                 file_hash=file_hash,
                 filename=filename,
                 extra={
@@ -65,9 +82,21 @@ class StatementRepository:
             s.flush()
             return row.id
 
-    def list_statements(self) -> list[StatementSummary]:
+    def count_statements(self, user_id: int) -> int:
         with self.db.session() as s:
-            rows = s.scalars(select(Statement).order_by(Statement.period_end.desc())).all()
+            return s.scalar(select(func.count()).select_from(Statement).where(Statement.user_id == user_id)) or 0
+
+    def owns(self, user_id: int, statement_id: int) -> bool:
+        with self.db.session() as s:
+            return s.scalar(
+                select(Statement.id).where(Statement.id == statement_id, Statement.user_id == user_id)
+            ) is not None
+
+    def list_statements(self, user_id: int) -> list[StatementSummary]:
+        with self.db.session() as s:
+            rows = s.scalars(
+                select(Statement).where(Statement.user_id == user_id).order_by(Statement.period_end.desc())
+            ).all()
             return [
                 StatementSummary(
                     id=r.id, filename=r.filename, card_last4=r.card_last4, period_start=r.period_start,
@@ -76,9 +105,9 @@ class StatementRepository:
                 for r in rows
             ]
 
-    def get_statement_detail(self, statement_id: int) -> StatementDetail | None:
+    def get_statement_detail(self, user_id: int, statement_id: int) -> StatementDetail | None:
         with self.db.session() as s:
-            row = s.get(Statement, statement_id)
+            row = s.scalar(select(Statement).where(Statement.id == statement_id, Statement.user_id == user_id))
             if row is None:
                 return None
             extra = row.extra or {}
@@ -92,43 +121,55 @@ class StatementRepository:
                 installments=[Installment.model_validate(i, from_attributes=True) for i in row.installments],
             )
 
-    def latest_statement_id(self) -> int | None:
+    def latest_statement_id(self, user_id: int) -> int | None:
         with self.db.session() as s:
-            return s.scalar(select(Statement.id).order_by(Statement.period_end.desc()).limit(1))
+            return s.scalar(
+                select(Statement.id)
+                .where(Statement.user_id == user_id)
+                .order_by(Statement.period_end.desc())
+                .limit(1)
+            )
 
-    def delete_statement(self, statement_id: int) -> None:
+    def delete_statement(self, user_id: int, statement_id: int) -> bool:
         with self.db.session() as s:
-            s.execute(delete(Statement).where(Statement.id == statement_id))
+            result = s.execute(
+                delete(Statement).where(Statement.id == statement_id, Statement.user_id == user_id)
+            )
+            return result.rowcount > 0
 
     # ------------------------------------------------------------- chunks / vectors
     def add_chunks(
-        self, statement_id: int, chunks: list[Chunk], vectors: list[list[float]], embedding_model: str
+        self, user_id: int, statement_id: int, chunks: list[Chunk], vectors: list[list[float]], embedding_model: str
     ) -> None:
         if len(chunks) != len(vectors):
             raise ValueError("chunks y vectors deben tener la misma longitud")
         with self.db.session() as s:
             s.add_all(
                 DocumentChunk(
-                    statement_id=statement_id, kind=c.kind, position=c.position, content=c.content,
-                    meta=c.meta, embedding=v, embedding_model=embedding_model,
+                    user_id=user_id, statement_id=statement_id, kind=c.kind, position=c.position,
+                    content=c.content, meta=c.meta, embedding=v, embedding_model=embedding_model,
                 )  # fmt: skip
                 for c, v in zip(chunks, vectors)
             )
 
-    def get_chunks_by_kind(self, statement_id: int, kind: str) -> list[RetrievedChunk]:
+    def get_chunks_by_kind(self, user_id: int, statement_id: int, kind: str) -> list[RetrievedChunk]:
         with self.db.session() as s:
             rows = s.scalars(
                 select(DocumentChunk)
-                .where(DocumentChunk.statement_id == statement_id, DocumentChunk.kind == kind)
+                .where(
+                    DocumentChunk.user_id == user_id,
+                    DocumentChunk.statement_id == statement_id,
+                    DocumentChunk.kind == kind,
+                )
                 .order_by(DocumentChunk.position)
             ).all()
             return [self._to_chunk(r, 1.0) for r in rows]
 
     def search_chunks(
-        self, vector: list[float], top_k: int, statement_id: int | None = None
+        self, user_id: int, vector: list[float], top_k: int, statement_id: int | None = None
     ) -> list[RetrievedChunk]:
         distance = DocumentChunk.embedding.cosine_distance(vector).label("distance")
-        stmt = select(DocumentChunk, distance).order_by(distance).limit(top_k)
+        stmt = select(DocumentChunk, distance).where(DocumentChunk.user_id == user_id).order_by(distance).limit(top_k)
         if statement_id is not None:
             stmt = stmt.where(DocumentChunk.statement_id == statement_id)
         with self.db.session() as s:
@@ -143,7 +184,7 @@ class StatementRepository:
 
 
 class MetricsRepository:
-    """Implementa el 'sink' que usa MetricsService."""
+    """Implementa el 'sink' que usa MetricsService. `user_id=None` en las consultas = todas las cuentas (admin)."""
 
     def __init__(self, db: Database):
         self.db = db
@@ -152,7 +193,15 @@ class MetricsRepository:
         with self.db.session() as s:
             s.add(ApiMetric(**fields))
 
-    def summary(self) -> list[OperationStats]:
+    def count_since(self, user_id: int, operation: str, since: datetime) -> int:
+        with self.db.session() as s:
+            return s.scalar(
+                select(func.count())
+                .select_from(ApiMetric)
+                .where(ApiMetric.user_id == user_id, ApiMetric.operation == operation, ApiMetric.created_at >= since)
+            ) or 0
+
+    def summary(self, user_id: int | None) -> list[OperationStats]:
         p95 = func.percentile_cont(0.95).within_group(ApiMetric.latency_ms)
         stmt = select(
             ApiMetric.operation,
@@ -164,6 +213,8 @@ class MetricsRepository:
             func.coalesce(func.sum(ApiMetric.output_tokens), 0),
             func.coalesce(func.sum(ApiMetric.cost_usd), 0.0),
         ).group_by(ApiMetric.operation).order_by(ApiMetric.operation)
+        if user_id is not None:
+            stmt = stmt.where(ApiMetric.user_id == user_id)
         with self.db.session() as s:
             return [
                 OperationStats(
@@ -174,9 +225,12 @@ class MetricsRepository:
                 for op, n, err, avg, p, tin, tout, cost in s.execute(stmt).all()
             ]
 
-    def recent(self, limit: int = 50) -> list[ApiCallRecord]:
+    def recent(self, user_id: int | None, limit: int = 50) -> list[ApiCallRecord]:
+        stmt = select(ApiMetric).order_by(ApiMetric.id.desc()).limit(limit)
+        if user_id is not None:
+            stmt = stmt.where(ApiMetric.user_id == user_id)
         with self.db.session() as s:
-            rows = s.scalars(select(ApiMetric).order_by(ApiMetric.id.desc()).limit(limit)).all()
+            rows = s.scalars(stmt).all()
             return [
                 ApiCallRecord(
                     created_at=r.created_at.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
@@ -186,3 +240,85 @@ class MetricsRepository:
                 )  # fmt: skip
                 for r in rows
             ]
+
+
+class UserRepository:
+    """Cuentas y sesiones. Los nombres de usuario llegan ya normalizados (minúsculas) desde AuthService."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    @staticmethod
+    def _account(row: User) -> UserAccount:
+        return UserAccount(
+            id=row.id, username=row.username, role=row.role, is_active=row.is_active,
+            password_hash=row.password_hash,
+        )  # fmt: skip
+
+    def get_by_username(self, username: str) -> UserAccount | None:
+        with self.db.session() as s:
+            row = s.scalar(select(User).where(User.username == username))
+            return self._account(row) if row else None
+
+    def get_by_id(self, user_id: int) -> UserAccount | None:
+        with self.db.session() as s:
+            row = s.get(User, user_id)
+            return self._account(row) if row else None
+
+    def count_users(self) -> int:
+        with self.db.session() as s:
+            return s.scalar(select(func.count()).select_from(User)) or 0
+
+    def create(self, username: str, password_hash: str | None, role: str = "user") -> UserAccount:
+        try:
+            with self.db.session() as s:
+                row = User(username=username, password_hash=password_hash, role=role)
+                s.add(row)
+                s.flush()
+                return self._account(row)
+        except IntegrityError as exc:  # dos registros simultáneos con el mismo nombre
+            raise AuthError("Ese nombre de usuario ya está en uso.") from exc
+
+    def set_password(self, user_id: int, password_hash: str) -> None:
+        with self.db.session() as s:
+            s.execute(update(User).where(User.id == user_id).values(password_hash=password_hash))
+
+    def set_role(self, user_id: int, role: str) -> None:
+        with self.db.session() as s:
+            s.execute(update(User).where(User.id == user_id).values(role=role))
+
+    def touch_login(self, user_id: int) -> None:
+        with self.db.session() as s:
+            s.execute(update(User).where(User.id == user_id).values(last_login_at=_utcnow()))
+
+    # ------------------------------------------------------------- sesiones
+    def create_session(self, user_id: int, token_hash: str, expires_at: datetime, user_agent: str | None) -> None:
+        with self.db.session() as s:
+            s.add(UserSession(user_id=user_id, token_hash=token_hash, expires_at=expires_at,
+                              user_agent=(user_agent or "")[:200] or None))
+            # De paso, limpia sesiones vencidas de este usuario.
+            s.execute(delete(UserSession).where(UserSession.user_id == user_id, UserSession.expires_at < _utcnow()))
+
+    def get_session(self, token_hash: str) -> tuple[UserAccount, datetime] | None:
+        with self.db.session() as s:
+            row = s.execute(
+                select(User, UserSession.expires_at)
+                .join(UserSession, UserSession.user_id == User.id)
+                .where(UserSession.token_hash == token_hash)
+            ).first()
+            return (self._account(row[0]), row[1]) if row else None
+
+    def extend_session(self, token_hash: str, expires_at: datetime) -> None:
+        with self.db.session() as s:
+            s.execute(update(UserSession).where(UserSession.token_hash == token_hash).values(expires_at=expires_at))
+
+    def delete_session(self, token_hash: str) -> None:
+        with self.db.session() as s:
+            s.execute(delete(UserSession).where(UserSession.token_hash == token_hash))
+
+    def delete_user_sessions(self, user_id: int, except_token_hash: str | None = None) -> None:
+        stmt = delete(UserSession).where(UserSession.user_id == user_id)
+        if except_token_hash:
+            stmt = stmt.where(UserSession.token_hash != except_token_hash)
+        with self.db.session() as s:
+            s.execute(stmt)

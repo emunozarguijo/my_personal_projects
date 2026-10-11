@@ -6,7 +6,7 @@ import time
 from typing import Protocol
 
 from app.core.config import Settings
-from app.core.logging import current_request_id, log_event
+from app.core.logging import current_request_id, current_user_id, log_event
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,8 @@ class MetricsService:
         )  # fmt: skip
         try:
             self._sink.add(
-                request_id=current_request_id(), operation=operation, provider=provider, model=model,
+                request_id=current_request_id(), user_id=current_user_id(), operation=operation,
+                provider=provider, model=model,
                 status=status, latency_ms=latency_ms, input_tokens=input_tokens,
                 output_tokens=output_tokens, cost_usd=cost, error=error, meta=meta or {},
             )  # fmt: skip
