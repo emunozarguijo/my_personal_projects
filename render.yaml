@@ -1,0 +1,56 @@
+# Blueprint de Render (plan free, costo cero). Render → New → Blueprint → elige este repo.
+# La BD es Neon (también gratis); Render solo corre la API web.
+# Los valores con `sync: false` te los pide Render al crear el Blueprint; nunca los pongas aquí.
+services:
+  - type: web
+    name: estado-cuenta-ai
+    runtime: python
+    plan: free
+    region: virginia            # cerca de Neon us-east-1
+    branch: main
+    autoDeploy: false           # el deploy lo dispara GitHub Actions solo si pasan los tests
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.api:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      - key: APP_ENV
+        value: prod
+      - key: LOG_LEVEL
+        value: INFO
+
+      # --- Base de datos (Neon) ---
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        value: "5432"
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_SCHEMA
+        sync: false
+      - key: DB_SSLMODE
+        value: require
+
+      # --- LLM ---
+      - key: LLM_PROVIDER
+        value: anthropic
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-5-5
+
+      # --- Embeddings ---
+      # El modelo local (PyTorch + MiniLM) no cabe en los 512 MB del plan free:
+      # en Render se usa el proveedor "fake" (hashing, sin modelo). Misma dimensión que la tabla.
+      - key: EMBEDDING_PROVIDER
+        value: fake
+      - key: EMBEDDING_DIM
+        value: "384"
+
+      - key: REDACT_PII
+        value: "true"
