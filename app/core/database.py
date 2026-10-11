@@ -43,9 +43,36 @@ class Database:
 
     def init_schema(self) -> None:
         self._ensure_vector_extension()
+        self._ensure_schema_exists()
         with self.engine.begin() as conn:
             Base.metadata.create_all(conn)
         logger.info("Esquema de base de datos listo (schema=%s)", self._schema or "por defecto")
+
+    def _ensure_schema_exists(self) -> None:
+        """Falla con un mensaje claro (a qué BD se conectó y qué esquemas ve) si DB_SCHEMA no existe."""
+        if not self._schema:
+            return
+        with self.engine.connect() as conn:
+            exists = conn.execute(
+                text("SELECT 1 FROM pg_namespace WHERE nspname = :s"), {"s": self._schema}
+            ).scalar()
+            if exists:
+                return
+            db, user, server = conn.execute(
+                text("SELECT current_database(), current_user, inet_server_addr()")
+            ).one()
+            schemas = conn.execute(
+                text(
+                    "SELECT nspname FROM pg_namespace WHERE nspname NOT LIKE 'pg\\_%' "
+                    "AND nspname <> 'information_schema' ORDER BY 1"
+                )
+            ).scalars().all()
+        raise ConfigurationError(
+            f"El esquema {self._schema!r} no existe en la BD a la que se conectó la app "
+            f"(database={db!r}, user={user!r}, server={server}, host={self.engine.url.host!r}). "
+            f"Esquemas visibles: {', '.join(schemas)}. Revisa DB_HOST / DB_NAME / DB_SCHEMA "
+            "(o DATABASE_URL, que tiene prioridad)."
+        )
 
     def _ensure_vector_extension(self) -> None:
         with self.engine.connect() as conn:
