@@ -8,6 +8,7 @@ from typing import Any
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
+    Boolean,
     Date,
     DateTime,
     Float,
@@ -17,6 +18,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -32,11 +34,39 @@ class Base(DeclarativeBase):
     pass
 
 
-class Statement(Base):
-    __tablename__ = "statements"
+class User(Base):
+    __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    file_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    username: Mapped[str] = mapped_column(String(32), unique=True)  # siempre en minúsculas
+    password_hash: Mapped[str | None] = mapped_column(String(255))  # None → no puede iniciar sesión
+    role: Mapped[str] = mapped_column(String(10), default="user", server_default="user")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UserSession(Base):
+    """Sesión web. Solo se guarda el SHA-256 del token; el token vive en la cookie del navegador."""
+
+    __tablename__ = "user_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    user_agent: Mapped[str | None] = mapped_column(String(200))
+
+
+class Statement(Base):
+    __tablename__ = "statements"
+    # El mismo PDF puede pertenecer a varios usuarios; solo es duplicado dentro de la misma cuenta.
+    __table_args__ = (UniqueConstraint("user_id", "file_hash", name="uq_statements_user_file_hash"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    file_hash: Mapped[str] = mapped_column(String(64))
     filename: Mapped[str] = mapped_column(String(255))
     bank: Mapped[str] = mapped_column(String(32), default="nu")
     card_last4: Mapped[str | None] = mapped_column(String(4))
@@ -130,6 +160,8 @@ class DocumentChunk(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # Copia de statements.user_id: la búsqueda vectorial filtra por usuario sin JOIN.
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     statement_id: Mapped[int] = mapped_column(ForeignKey("statements.id", ondelete="CASCADE"), index=True)
     kind: Mapped[str] = mapped_column(String(32), index=True)
     position: Mapped[int] = mapped_column(Integer, default=0)
@@ -146,8 +178,10 @@ class ApiMetric(Base):
     """Una fila por llamada instrumentada: chat, embedding, retrieval o ingestion."""
 
     __tablename__ = "api_metrics"
+    __table_args__ = (Index("ix_api_metrics_user_id_created_at", "user_id", "created_at"),)  # cuotas diarias
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     request_id: Mapped[str] = mapped_column(String(32), index=True)
     operation: Mapped[str] = mapped_column(String(20), index=True)

@@ -12,8 +12,10 @@ logger = logging.getLogger(__name__)
 
 
 class ChunkStore(Protocol):
-    def search_chunks(self, vector: list[float], top_k: int, statement_id: int | None = None) -> list[RetrievedChunk]: ...
-    def get_chunks_by_kind(self, statement_id: int, kind: str) -> list[RetrievedChunk]: ...
+    def search_chunks(
+        self, user_id: int, vector: list[float], top_k: int, statement_id: int | None = None
+    ) -> list[RetrievedChunk]: ...
+    def get_chunks_by_kind(self, user_id: int, statement_id: int, kind: str) -> list[RetrievedChunk]: ...
 
 
 class Retriever:
@@ -23,15 +25,15 @@ class Retriever:
         self.metrics = metrics
         self.top_k = top_k
 
-    def retrieve(self, question: str, statement_id: int | None = None) -> list[RetrievedChunk]:
+    def retrieve(self, user_id: int, question: str, statement_id: int | None = None) -> list[RetrievedChunk]:
         with Stopwatch() as sw:
             vector = self.embeddings.embed_query(question)
-            hits = self.store.search_chunks(vector, self.top_k, statement_id)
+            hits = self.store.search_chunks(user_id, vector, self.top_k, statement_id)
 
             # El resumen (fechas, pagos, tasas) responde la mayoría de las preguntas: siempre va primero.
             summaries: list[RetrievedChunk] = []
             if statement_id is not None:
-                summaries = self.store.get_chunks_by_kind(statement_id, "summary")
+                summaries = self.store.get_chunks_by_kind(user_id, statement_id, "summary")
             seen = {(c.statement_id, c.kind, c.position) for c in summaries}
             chunks = summaries + [h for h in hits if (h.statement_id, h.kind, h.position) not in seen]
 

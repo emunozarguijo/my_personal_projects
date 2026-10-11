@@ -87,12 +87,12 @@ class IngestionNodes:
 
     @traced("check_duplicate")
     def check_duplicate(self, state: IngestionState):
-        existing = self.repo.find_by_hash(state["file_hash"])
+        existing = self.repo.find_by_hash(state["user_id"], state["file_hash"])
         return {"duplicate": True, "statement_id": existing} if existing else {"duplicate": False}
 
     @traced("persist_statement")
     def persist_statement(self, state: IngestionState):
-        sid = self.repo.save_statement(state["parsed"], state["file_hash"], state["filename"])
+        sid = self.repo.save_statement(state["user_id"], state["parsed"], state["file_hash"], state["filename"])
         return {"statement_id": sid}
 
     @traced("build_chunks")
@@ -103,7 +103,7 @@ class IngestionNodes:
     def embed_and_store(self, state: IngestionState):
         chunks = state["chunks"]
         vectors = self.embeddings.embed_documents([c.content for c in chunks])
-        self.repo.add_chunks(state["statement_id"], chunks, vectors, self.embeddings.model)
+        self.repo.add_chunks(state["user_id"], state["statement_id"], chunks, vectors, self.embeddings.model)
         return {"n_chunks": len(chunks)}
 
 
@@ -115,7 +115,7 @@ class QANodes:
 
     @traced("retrieve")
     def retrieve(self, state: QAState):
-        return {"chunks": self.retriever.retrieve(state["question"], state.get("statement_id"))}
+        return {"chunks": self.retriever.retrieve(state["user_id"], state["question"], state.get("statement_id"))}
 
     @traced("build_prompt")
     def build_prompt(self, state: QAState):

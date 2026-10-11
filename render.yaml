@@ -10,7 +10,8 @@ services:
     branch: main
     autoDeploy: false           # el deploy lo dispara GitHub Actions solo si pasan los tests
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.api:app --host 0.0.0.0 --port $PORT
+    # Aplica migraciones pendientes y arranca. --proxy-headers: la IP real del cliente (límite de intentos de login).
+    startCommand: python -m app.migrate && uvicorn app.api:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips '*'
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
@@ -54,3 +55,25 @@ services:
 
       - key: REDACT_PII
         value: "true"
+
+      # --- Cuentas (multiusuario) ---
+      # Código que compartes junto con la URL; sin él nadie puede registrarse (protege tu API key).
+      - key: SIGNUP_INVITE_CODE
+        sync: false
+      # Dueño de los datos que ya existían antes de la migración multiusuario (se usa una sola vez).
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: SESSION_TTL_HOURS
+        value: "168"
+
+      # --- Límites de uso por cuenta (0 = sin límite) ---
+      - key: MAX_USERS
+        value: "50"
+      - key: MAX_STATEMENTS_PER_USER
+        value: "24"
+      - key: MAX_ASKS_PER_DAY
+        value: "30"
+      - key: MAX_UPLOADS_PER_DAY
+        value: "10"

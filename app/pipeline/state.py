@@ -7,6 +7,7 @@ from app.schemas import Chunk, LLMResponse, ParsedStatement, RetrievedChunk
 
 
 class IngestionState(TypedDict, total=False):
+    user_id: int
     path: str
     filename: str
     file_hash: str
@@ -21,6 +22,7 @@ class IngestionState(TypedDict, total=False):
 
 
 class QAState(TypedDict, total=False):
+    user_id: int
     question: str
     statement_id: int | None
     history: list[dict[str, str]]

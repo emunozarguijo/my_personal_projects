@@ -9,7 +9,7 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Callable
 
 from app.schemas import StatementSummary
-from app.services.assistant import StatementAssistant
+from app.services.assistant import UserAssistant
 
 QUICK_QUESTIONS = [
     "¿Cuánto debo pagar para no generar intereses y hasta cuándo?",
@@ -20,7 +20,7 @@ QUICK_QUESTIONS = [
 
 
 class App(tk.Tk):
-    def __init__(self, assistant: StatementAssistant):
+    def __init__(self, assistant: UserAssistant):
         super().__init__()
         self.assistant = assistant
         self.title("Asistente de estado de cuenta")
@@ -257,6 +257,6 @@ class App(tk.Tk):
             ))  # fmt: skip
 
 
-def run_gui(assistant: StatementAssistant) -> None:
+def run_gui(assistant: UserAssistant) -> None:
     app = App(assistant)
     app.mainloop()

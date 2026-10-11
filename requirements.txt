@@ -14,6 +14,10 @@ langgraph==1.2.14
 anthropic==1.13.0
 openai==3.28.0
 
+# Cuentas y migraciones
+alembic==1.20.0
+pwdlib[argon2]==0.3.1
+
 # API web
 fastapi==0.143.0
 uvicorn[standard]==0.54.0

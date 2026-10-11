@@ -203,3 +203,24 @@ tr.best td{background:var(--ok-wash)}
   .bar{grid-template-columns:minmax(0,1fr) auto}.bar .tr{grid-column:1/-1;order:3}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ---------- Cuenta: acceso, barra de usuario y diálogo ---------- */
+.auth{min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:32px 16px}
+.auth-card{width:100%;max-width:400px;background:var(--panel);border:1px solid var(--line);border-radius:calc(var(--r) * 1.6);padding:30px 28px 26px;box-shadow:0 18px 50px rgba(20,10,40,.08)}
+.auth-tabs{display:flex;gap:22px;border-bottom:1px solid var(--line);margin:22px 0 18px}
+.auth-form{display:flex;flex-direction:column;gap:14px}
+.auth-form label{display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:600;color:var(--ink)}
+.auth-form input{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:11px 13px;font-weight:400}
+.auth-form input:focus{border-color:var(--jacaranda)}
+.auth-form .btn{margin-top:4px}
+.auth-hint{margin:0;color:var(--ink-2);font-size:13px}
+.auth-error{margin:0;background:var(--bad-wash);color:var(--bad);border-radius:var(--r);padding:9px 12px;font-size:14px}
+.account{display:flex;flex-wrap:wrap;align-items:center;gap:4px 14px;padding:14px 22px 18px;border-top:1px solid var(--line);font-size:14px}
+.account-name{flex-basis:100%;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.link-btn{background:none;border:0;padding:0;color:var(--ink-2);cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.link-btn:hover{color:var(--jacaranda)}
+.dlg{border:1px solid var(--line);border-radius:calc(var(--r) * 1.6);padding:26px 26px 22px;background:var(--panel);color:var(--ink);width:min(420px,calc(100vw - 32px))}
+.dlg::backdrop{background:rgba(20,10,40,.45)}
+.dlg h2{font:700 20px var(--display);margin:0 0 4px}
+.dlg-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:4px}
+@media (max-width:900px){.account{padding:12px 18px}}

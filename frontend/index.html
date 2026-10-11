@@ -10,7 +10,35 @@
 <link rel="stylesheet" href="/static/css/styles.css">
 </head>
 <body>
-<div class="shell" id="shell">
+<main class="auth" id="auth" hidden>
+  <div class="auth-card">
+    <div class="brand">Mis estados de cuenta</div>
+    <div class="brand-sub">Entiende tu tarjeta, mes a mes.</div>
+    <div class="auth-tabs" role="tablist">
+      <button class="tab" role="tab" type="button" data-mode="login" aria-selected="true">Entrar</button>
+      <button class="tab" role="tab" type="button" data-mode="register" aria-selected="false">Crear cuenta</button>
+    </div>
+    <form class="auth-form" id="auth-form" novalidate>
+      <label>Usuario
+        <input id="auth-user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32" required>
+      </label>
+      <label>Contraseña
+        <input id="auth-pass" name="password" type="password" autocomplete="current-password" maxlength="128" required>
+      </label>
+      <label data-only="register" hidden>Repite la contraseña
+        <input id="auth-pass2" type="password" autocomplete="new-password" maxlength="128">
+      </label>
+      <label data-only="register" id="auth-invite-wrap" hidden>Código de invitación
+        <input id="auth-invite" autocomplete="off" spellcheck="false" maxlength="200">
+      </label>
+      <p class="auth-hint" data-only="register" hidden>Usuario de 3 a 32 caracteres (letras, números, punto, guion). Contraseña de al menos 10 caracteres.</p>
+      <p class="auth-error" id="auth-error" role="alert" hidden></p>
+      <button class="btn" id="auth-submit" type="submit">Entrar</button>
+    </form>
+  </div>
+</main>
+
+<div class="shell" id="shell" hidden>
   <aside class="rail" aria-label="Estados de cuenta cargados">
     <div class="rail-head">
       <div class="brand">Mis estados de cuenta</div>
@@ -22,6 +50,11 @@
     </button>
     <input type="file" id="file" accept=".pdf,application/pdf" multiple hidden>
     <nav class="months" id="months"></nav>
+    <div class="account">
+      <span class="account-name" id="account-name"></span>
+      <button class="link-btn" id="pw-open" type="button">Cambiar contraseña</button>
+      <button class="link-btn" id="logout" type="button">Salir</button>
+    </div>
   </aside>
 
   <main class="main">
@@ -62,7 +95,23 @@
 </div>
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 
+<dialog class="dlg" id="pw-dialog" aria-labelledby="pw-title">
+  <form class="auth-form" id="pw-form" novalidate>
+    <h2 id="pw-title">Cambiar contraseña</h2>
+    <label>Contraseña actual <input id="pw-current" type="password" autocomplete="current-password" maxlength="128" required></label>
+    <label>Contraseña nueva <input id="pw-new" type="password" autocomplete="new-password" maxlength="128" required></label>
+    <label>Repite la nueva <input id="pw-new2" type="password" autocomplete="new-password" maxlength="128" required></label>
+    <p class="auth-hint">Al guardarla se cierra tu sesión en los demás dispositivos.</p>
+    <p class="auth-error" id="pw-error" role="alert" hidden></p>
+    <div class="dlg-actions">
+      <button class="icon-btn" id="pw-cancel" type="button">Cancelar</button>
+      <button class="btn" type="submit">Guardar</button>
+    </div>
+  </form>
+</dialog>
+
 <script src="/static/js/helpers.js"></script>
 <script src="/static/js/app.js"></script>
+<script src="/static/js/auth.js"></script>
 </body>
 </html>

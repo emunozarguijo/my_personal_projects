@@ -13,6 +13,7 @@ from logging.handlers import RotatingFileHandler
 from app.core.config import Settings
 
 _request_id: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+_user_id: contextvars.ContextVar[int | None] = contextvars.ContextVar("user_id", default=None)
 _configured = False
 
 
@@ -20,14 +21,20 @@ def current_request_id() -> str:
     return _request_id.get()
 
 
+def current_user_id() -> int | None:
+    return _user_id.get()
+
+
 @contextmanager
-def request_context(request_id: str | None = None):
-    """Asocia un request_id a todos los logs/métricas generados dentro del bloque (por hilo)."""
-    token = _request_id.set(request_id or uuid.uuid4().hex[:12])
+def request_context(request_id: str | None = None, user_id: int | None = None):
+    """Asocia request_id y usuario a todos los logs/métricas generados dentro del bloque (por hilo)."""
+    rid_token = _request_id.set(request_id or uuid.uuid4().hex[:12])
+    uid_token = _user_id.set(user_id if user_id is not None else _user_id.get())
     try:
         yield _request_id.get()
     finally:
-        _request_id.reset(token)
+        _user_id.reset(uid_token)
+        _request_id.reset(rid_token)
 
 
 class JsonFormatter(logging.Formatter):
@@ -37,6 +44,7 @@ class JsonFormatter(logging.Formatter):
             "level": record.levelname,
             "logger": record.name,
             "request_id": _request_id.get(),
+            "user_id": _user_id.get(),
             "msg": record.getMessage(),
         }
         ctx = getattr(record, "ctx", None)
