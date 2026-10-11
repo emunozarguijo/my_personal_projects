@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.container import build_assistant
@@ -60,12 +61,13 @@ def _safe_name(name: str) -> str:
 
 
 # ------------------------------------------------------------------ páginas
-WEB_DIR = Path(__file__).parent / "ui" / "web"
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 
 @app.get("/", include_in_schema=False)
 def home() -> FileResponse:
-    return FileResponse(WEB_DIR / "index.html")
+    return FileResponse(FRONTEND_DIR / "index.html")
 
 
 @app.get("/health")
