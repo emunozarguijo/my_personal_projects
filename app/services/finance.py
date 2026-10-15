@@ -33,7 +33,8 @@ from app.schemas import (
     TransactionKind,
 )
 from app.services.categorizer import CATEGORIES, DEDUCTIBLE, ESSENTIAL, UNCLASSIFIED, normalize_merchant, rule_category
-from app.services.chunking import dmy, money
+from app.core.formatting import dmy, money
+from app.core.formatting import pct as _pct
 from app.services.credit_health import POINTS, build_report, level_of
 
 Z = Decimal(0)
@@ -116,10 +117,6 @@ def nu_gaps(statements: list[StatementDetail], start: date, end: date) -> list[t
     if cursor <= end:
         gaps.append((cursor, end))
     return gaps
-
-
-def _pct(part: Decimal, whole: Decimal) -> float:
-    return float(part / whole * 100) if whole else 0.0
 
 
 def _ind(key, label, status, weight, display="N/D", detail="", value=None) -> HealthIndicator:
@@ -309,12 +306,16 @@ class FinanceService:
     def current_month(self) -> str:
         return self._today().strftime("%Y-%m")
 
-    def month(self, user_id: int, month: str | None = None) -> MonthlySummary:
+    def month(self, user_id: int, month: str | None = None,
+              statements: list[StatementDetail] | None = None) -> MonthlySummary:  # fmt: skip
+        """`statements`: estados de cuenta ya cargados (el chat los reutiliza para no consultarlos dos veces)."""
         month = month or self.current_month()
         start, end = month_bounds(month)
+        if statements is None:
+            statements = self.statements.list_statement_details(user_id)
         return build_month(
             month, self.repo.incomes_for_range(user_id, start, end), self.repo.cash_for_range(user_id, start, end),
-            self.statements.list_statement_details(user_id), self._today(),
+            statements, self._today(),
         )  # fmt: skip
 
     # ------------------------------------------------------------- validación común

@@ -57,6 +57,8 @@ def test_migration_assigns_legacy_data_to_admin(ctx):
                        VALUES ('h1', 'sep.pdf', 'nu', '2026-08-10', '2026-09-09', '2026-09-09', '{{}}') RETURNING id""").scalar()
     _run(db, f"""INSERT INTO {q('document_chunks')} (statement_id, kind, position, content, meta, embedding, embedding_model)
                  VALUES (:sid, 'summary', 0, 'x', '{{}}', :v, 'fake')""", sid=sid, v=str([0.1] * settings.embedding_dim))
+    _run(db, f"""INSERT INTO {q('transactions')} (statement_id, position, operation_date, charge_date, description, amount, kind, currency)
+                 VALUES (:sid, 0, '2026-08-20', '2026-08-20', 'Sears Metepec', 100, 'purchase', 'MXN')""", sid=sid)
 
     migrate.upgrade(settings)
 
@@ -64,6 +66,7 @@ def test_migration_assigns_legacy_data_to_admin(ctx):
     assert admin.username == "admin" and admin.role == "admin"
     assert _run(db, f"SELECT user_id FROM {q('statements')}").scalar() == admin.id
     assert _run(db, f"SELECT user_id FROM {q('document_chunks')}").scalar() == admin.id
+    assert _run(db, f"SELECT merchant_key FROM {q('transactions')}").scalar() == "sears metepec"  # llenado por 0005
     db.verify_ready(migrate.head_revision(settings))
     _run(db, f"DELETE FROM {q('users')}")  # deja la BD limpia para las demás pruebas (CASCADE)
     assert _run(db, f"SELECT count(*) FROM {q('statements')}").scalar() == 0
@@ -216,3 +219,46 @@ def test_finance_repository_in_sql(ctx, repos):
     assert fin.delete_cash_expense(beto.id, e.id) is False and fin.delete_income(beto.id, salary.id) is False
     assert fin.count_created_since(ana.id, datetime.now(timezone.utc) - timedelta(hours=1)) == 3
     assert fin.delete_cash_expense(ana.id, e.id) is True
+
+
+def test_merchant_key_backfill_and_iterative_search(ctx, repos, parsed):
+    from sqlalchemy import text as sql
+
+    settings, db, _, q = ctx
+    statements, _, users = repos
+    ana, beto = users.create("ana", None), users.create("beto", None)
+    sid = statements.save_statement(ana.id, parsed, "h-key", "a.pdf")
+    keys = dict(_run(db, f"SELECT description, merchant_key FROM {q('transactions')} WHERE statement_id = :s", s=sid).all())
+    assert keys["Sears Metepec"] == "sears metepec"
+
+    # Muchos fragmentos de Ana muy parecidos a la consulta y uno solo de Beto: Beto debe recibir el suyo.
+    from app.schemas import Chunk
+
+    vec = [1.0] + [0.0] * (settings.embedding_dim - 1)
+    far = [0.0, 1.0] + [0.0] * (settings.embedding_dim - 2)
+    statements.add_chunks(ana.id, sid, [Chunk(kind="transactions", content=f"a{i}") for i in range(120)], [vec] * 120, "t")
+    b_sid = statements.save_statement(beto.id, parsed, "h-key-b", "b.pdf")
+    statements.add_chunks(beto.id, b_sid, [Chunk(kind="summary", content="solo de beto")], [far], "t")
+    hits = statements.search_chunks(beto.id, vec, top_k=6)
+    assert [h.content for h in hits] == ["solo de beto"]
+    assert statements._iterative_scan is True  # pgvector >= 0.8 en Neon y en la imagen de CI
+
+
+def test_loading_statements_uses_a_fixed_number_of_queries(ctx, repos, parsed):
+    from sqlalchemy import event
+
+    _, db, _, _ = ctx
+    statements, _, users = repos
+    ana = users.create("ana", None)
+    for i in range(4):
+        statements.save_statement(ana.id, parsed, f"h-{i}", f"{i}.pdf")
+
+    queries = []
+    listener = lambda *a, **k: queries.append(a[2])  # noqa: E731  (statement SQL)
+    event.listen(db.engine, "before_cursor_execute", listener)
+    try:
+        details = statements.list_statement_details(ana.id)
+    finally:
+        event.remove(db.engine, "before_cursor_execute", listener)
+    assert len(details) == 4 and all(d.transactions for d in details)
+    assert len(queries) == 3, queries   # estados + movimientos + compras a meses, sin importar cuántos estados haya

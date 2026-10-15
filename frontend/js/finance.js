@@ -42,18 +42,13 @@ function formHTML(){
 function tile(label,value,sub){return '<div><div class="big">'+value+'</div><div class="small">'+label+(sub?'<br>'+sub:'')+'</div></div>';}
 
 function renderMonth(){
-  const d=fin.data,st=scoreStatus(d.score);
+  const d=fin.data;
   let h='<div class="month-nav"><button class="icon-btn" type="button" data-nav="-1" aria-label="Mes anterior">‹</button>'
     +'<h2>'+esc(monthTitle(d.month+'-01'))+'</h2>'
     +'<button class="icon-btn" type="button" data-nav="1" aria-label="Mes siguiente">›</button></div>';
   h+=formHTML();
 
-  h+='<section class="hero-health">'
-    +'<div><div class="hero-label">Índice de salud financiera</div>'
-    +'<div class="hero-num">'+(d.score==null?'—':d.score)+'<span>/100</span></div>'
-    +'<div class="status-chip '+st+'"><span aria-hidden="true">'+STATUS[st].icon+'</span>'+esc(d.level)+'</div></div>'
-    +'<div class="meter" role="img" aria-label="Índice '+(d.score==null?'sin datos':d.score+' de 100')+'"><div class="meter-fill '+st+'" style="width:'+(d.score||0)+'%"></div></div>'
-    +'<p class="small">'+esc(d.notes[0]||'')+'</p></section>';
+  h+=scoreHeroHTML('Índice de salud financiera',d.score,d.level,d.notes[0]);
 
   const bal=Number(d.balance);
   h+='<div class="strip month-strip">'
@@ -64,11 +59,8 @@ function renderMonth(){
     +'</div>';
   if(Number(d.card_payments)>0)h+='<p class="small">Pagaste '+money(d.card_payments)+' a tu tarjeta Nu este mes. No cuenta como gasto: tus compras ya se contaron cuando las hiciste.</p>';
 
-  h+='<div class="ind-grid">'+d.indicators.map(i=>{const s=STATUS[i.status];
-    return '<article class="ind"><div class="ind-head"><span class="ind-label">'+esc(i.label)+'</span><span class="status-chip '+i.status+'"><span aria-hidden="true">'+s.icon+'</span>'+s.text+'</span></div>'
-      +'<div class="ind-value">'+esc(i.display)+'</div><p class="small">'+esc(i.detail)+'</p></article>';}).join('')+'</div>';
-
-  if(d.recommendations.length)h+='<div class="block"><h2>Qué puedes hacer</h2><ol class="recs">'+d.recommendations.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ol></div>';
+  h+=indicatorsHTML(d.indicators);
+  h+=recsHTML(d.recommendations);
 
   h+='<div class="block"><h2>Gasto por categoría</h2><div class="cat-bars">';
   const max=Math.max(...d.categories.map(c=>Number(c.total)),1);

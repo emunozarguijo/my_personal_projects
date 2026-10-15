@@ -218,7 +218,8 @@ flowchart LR
 │       ├── health.js      # Pestaña Salud crediticia: índice, semáforos y gráficas SVG
 │       ├── finance.js     # Pestaña Mi mes: registro rápido, panorama y movimientos del mes
 │       └── auth.js        # Entrar / crear cuenta / salir / cambiar contraseña; arranque
-├── migrations/            # Alembic: 0001 base, 0002 multiusuario, 0003 categorías, 0004 ingresos y efectivo
+├── migrations/            # Alembic: 0001 base, 0002 multiusuario, 0003 categorías, 0004 ingresos y efectivo,
+│                          #          0005 comercio normalizado
 ├── alembic.ini
 ├── tests/                 # pytest: dobles en fakes.py; test_db.py usa PostgreSQL real
 ├── .github/workflows/ci-cd.yml   # Tests en cada push; deploy a Render desde main
@@ -406,6 +407,14 @@ Consulta de ejemplo: `SELECT operation, avg(latency_ms), sum(input_tokens), sum(
 - **Versiones fijas** en `requirements*.txt`: CI, Render y tu PC instalan exactamente lo mismo.
 - **Migraciones con Alembic** (no `create_all`): la app verifica al arrancar que la BD esté en la última revisión y,
   si no, pide ejecutar `python -m app.migrate`.
+- **Rendimiento con la base en la nube** (cada consulta es un viaje de red Render → Neon):
+  - Los estados de cuenta se cargan con sus movimientos y compras a meses en **3 consultas fijas** (`selectinload`), no
+    dos por cada estado de cuenta; el chat reutiliza esa misma carga para el reporte crediticio y el del mes.
+  - Las **métricas se escriben en segundo plano y en lotes** (`BackgroundMetricsSink`): no retrasan la respuesta y se
+    vacían al apagar la app.
+  - La búsqueda vectorial usa el **escaneo iterativo de pgvector ≥ 0.8** (`SET LOCAL hnsw.iterative_scan`) para que el
+    filtro por usuario no deje respuestas con menos fragmentos cuando haya muchas cuentas.
+  - Corregir una categoría es **un solo `UPDATE`** gracias a `transactions.merchant_key` (comercio normalizado).
 - **Sesiones en BD en lugar de JWT:** se pueden revocar (logout real, cambio de contraseña) y no requieren secretos
   extra que rotar.
 

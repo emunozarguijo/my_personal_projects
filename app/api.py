@@ -162,13 +162,23 @@ def change_password(body: ChangePasswordRequest, request: Request, user: UserAcc
 _ASSET_RE = re.compile(r'(/static/[^"?]+\.(?:js|css))"')
 
 
+_assets_cache: dict[tuple, str] = {}
+
+
 def assets_version() -> str:
-    """Huella de los archivos del frontend: cambia en cuanto cambia cualquiera de ellos."""
-    digest = hashlib.sha256()
-    for path in sorted(FRONTEND_DIR.rglob("*")):
-        if path.suffix in (".js", ".css"):
+    """Huella de los archivos del frontend: cambia en cuanto cambia cualquiera de ellos.
+
+    Solo se vuelve a leer y hashear si cambió la fecha o el tamaño de algún archivo (consultar eso es casi gratis).
+    """
+    files = sorted(p for p in FRONTEND_DIR.rglob("*") if p.suffix in (".js", ".css"))
+    signature = tuple((str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in files)
+    if signature not in _assets_cache:
+        digest = hashlib.sha256()
+        for path in files:
             digest.update(path.read_bytes())
-    return digest.hexdigest()[:10]
+        _assets_cache.clear()
+        _assets_cache[signature] = digest.hexdigest()[:10]
+    return _assets_cache[signature]
 
 
 @router.get("/", include_in_schema=False)
@@ -402,6 +412,8 @@ def create_app(
         app.state.settings = settings
         app.state.services = services_factory(settings)  # se crean una sola vez al arrancar
         yield
+        if getattr(app.state.services, "close", None):
+            app.state.services.close()  # p. ej. escribe las métricas que quedaron en cola
 
     docs = settings.docs_enabled
     app = FastAPI(
