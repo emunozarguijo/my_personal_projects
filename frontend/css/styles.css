@@ -6,6 +6,8 @@
   --display:'Bricolage Grotesque','Segoe UI',system-ui,sans-serif;
   --text:'Figtree','Segoe UI',system-ui,sans-serif;
   --r:10px;
+  /* Marcas de gráficas y semáforos (validadas: contraste >= 3:1, separación CVD y luminosidad) */
+  --mark-good:#1f8a5b; --mark-warn:#b97c00; --mark-bad:#b83232; --mark-accent:#6a3fc2;
 }
 @media (prefers-color-scheme:dark){
   :root{
@@ -13,6 +15,7 @@
     --jacaranda:#a98bf2; --jacaranda-ink:#17102a; --jacaranda-wash:#2b2150;
     --marigold:#f5b83a; --marigold-wash:#3a2d10; --marigold-ink:#f5d58a;
     --ok:#4cc38a; --ok-wash:#17332a; --bad:#f07a7a; --bad-wash:#3a1d22;
+    --mark-good:#33a06e; --mark-warn:#c08614; --mark-bad:#cf4470; --mark-accent:#8a68e0;
   }
 }
 *{box-sizing:border-box}
@@ -224,3 +227,58 @@ tr.best td{background:var(--ok-wash)}
 .dlg h2{font:700 20px var(--display);margin:0 0 4px}
 .dlg-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:4px}
 @media (max-width:900px){.account{padding:12px 18px}}
+
+/* ---------- Salud crediticia ---------- */
+#v-salud.loading{opacity:.55;transition:opacity .2s}
+.hero-health{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 40px;align-items:end;padding-bottom:26px;border-bottom:1px solid var(--line)}
+.hero-health .small{grid-column:1/-1;margin:6px 0 0}
+.hero-label{font-weight:600;color:var(--ink-2);font-size:14px}
+.hero-num{font:700 64px/1 var(--text);letter-spacing:-.03em;margin:6px 0 10px}
+.hero-num span{font-size:22px;font-weight:600;color:var(--ink-2);margin-left:4px;letter-spacing:0}
+.meter{height:12px;border-radius:99px;background:var(--line-2);overflow:hidden;align-self:center;margin-bottom:8px}
+.meter-fill{height:100%;border-radius:99px;background:var(--ink-2);transition:width .4s}
+.meter-fill.good{background:var(--mark-good)}.meter-fill.warn{background:var(--mark-warn)}.meter-fill.bad{background:var(--mark-bad)}
+.status-chip{display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:var(--ink);background:var(--line-2);border-radius:99px;padding:3px 10px 3px 4px;white-space:nowrap}
+.status-chip>span{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;font-size:11px;font-weight:800;color:#fff;background:var(--ink-2)}
+.status-chip.good{background:var(--ok-wash)}.status-chip.good>span{background:var(--mark-good)}
+.status-chip.warn{background:var(--marigold-wash)}.status-chip.warn>span{background:var(--mark-warn)}
+.status-chip.bad{background:var(--bad-wash)}.status-chip.bad>span{background:var(--mark-bad)}
+.ind-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:16px;margin-top:28px}
+.ind{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px}
+.ind-head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.ind-label{font-weight:600;font-size:14px}
+.ind-value{font:700 22px/1.2 var(--display);margin:10px 0 4px}
+.ind .small{margin:0}
+.recs{margin:12px 0 0;padding-left:22px;display:grid;gap:8px}
+.chart{position:relative;margin-top:12px}
+.chart svg{width:100%;height:auto;display:block;overflow:visible}
+.chart .grid{stroke:var(--line);stroke-width:1}
+.chart .ref{stroke:var(--ink-2);stroke-width:1;opacity:.6}
+.chart .axis{fill:var(--ink-2);font-size:12px;font-variant-numeric:tabular-nums}
+.chart .end{fill:var(--ink);font-size:13px;font-weight:700}
+.chart .line{fill:none;stroke:var(--mark-accent);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.chart .area{fill:var(--mark-accent);opacity:.1}
+.chart .dot{fill:var(--mark-accent);stroke:var(--paper);stroke-width:2}
+.chart .cross{stroke:var(--ink-2);stroke-width:1}
+.chart .hit{fill:transparent;cursor:crosshair}
+.chart .col{fill:var(--mark-accent);opacity:.55;cursor:pointer;outline:none}
+.chart .col.current{opacity:1}
+.chart .col:hover,.chart .col:focus{opacity:.85}
+.chart svg:focus{outline:2px solid var(--jacaranda);outline-offset:4px;border-radius:4px}
+.tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 10px;box-shadow:0 6px 18px rgba(20,10,40,.15);display:grid;font-size:12px;color:var(--ink-2);min-width:120px}
+.tip strong{color:var(--ink);font-size:15px}
+.cat-bars{display:grid;gap:10px;margin-top:14px}
+.cat-row{display:grid;grid-template-columns:minmax(150px,220px) minmax(0,1fr);gap:14px;align-items:center}
+.cat-name{font-size:14px}
+.cat-track{display:flex;align-items:center;gap:10px;min-width:0}
+.cat-bar{display:block;height:14px;border-radius:0 4px 4px 0;background:var(--mark-accent);flex:none;max-width:72%}
+.cat-bar.muted{background:var(--line)}
+.cat-val{font-size:13px;font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums}
+.cat-val small{color:var(--ink-2);font-weight:500}
+.tag{display:inline-block;margin-left:6px;font-size:11px;font-weight:700;color:var(--ink);background:var(--ok-wash);border-radius:99px;padding:1px 8px;white-space:nowrap}
+.cat-select{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:3px 6px;font-size:13px;max-width:180px}
+.table-view summary{cursor:pointer;font-weight:600}
+@media (max-width:900px){
+  .hero-health{grid-template-columns:1fr}
+  .cat-row{grid-template-columns:1fr;gap:4px}
+}

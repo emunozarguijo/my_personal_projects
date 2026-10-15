@@ -75,13 +75,15 @@
     </header>
 
     <div class="tabs" role="tablist">
-      <button class="tab" role="tab" data-tab="resumen" aria-selected="true">Resumen</button>
+      <button class="tab" role="tab" data-tab="salud" aria-selected="true">Salud crediticia</button>
+      <button class="tab" role="tab" data-tab="resumen" aria-selected="false">Resumen</button>
       <button class="tab" role="tab" data-tab="movimientos" aria-selected="false">Movimientos</button>
       <button class="tab" role="tab" data-tab="preguntar" aria-selected="false">Preguntar</button>
       <button class="tab" role="tab" data-tab="metricas" aria-selected="false">Métricas</button>
     </div>
 
-    <section class="view" id="v-resumen"></section>
+    <section class="view" id="v-salud"></section>
+    <section class="view" id="v-resumen" hidden></section>
     <section class="view" id="v-movimientos" hidden></section>
     <section class="view view--chat" id="v-preguntar" hidden>
       <div class="chat-scroll" id="chat" aria-live="polite"></div>
@@ -112,6 +114,7 @@
 
 <script src="/static/js/helpers.js"></script>
 <script src="/static/js/app.js"></script>
+<script src="/static/js/health.js"></script>
 <script src="/static/js/auth.js"></script>
 </body>
 </html>

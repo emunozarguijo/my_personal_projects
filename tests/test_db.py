@@ -156,3 +156,32 @@ def test_sessions_and_user_cascade(ctx, repos, parsed):
     _index(statements, settings, ana.id, parsed, "h")
     _run(db, f"DELETE FROM {q('users')} WHERE id = :id", id=ana.id)
     assert _run(db, f"SELECT count(*) FROM {q('document_chunks')}").scalar() == 0
+
+
+def test_categories_in_sql_are_isolated_and_upserted(ctx, repos, parsed):
+    from app.services.categorizer import TransactionCategorizer
+
+    settings, *_ = ctx
+    statements, _, users = repos
+    ana, beto = users.create("ana", None), users.create("beto", None)
+    categorized = parsed.model_copy(update={"transactions": TransactionCategorizer(statements).categorize(ana.id, parsed.transactions)})
+    a_sid = statements.save_statement(ana.id, categorized, "h-ana", "a.pdf")
+    b_sid = statements.save_statement(beto.id, parsed, "h-beto", "b.pdf")
+
+    a_tx = statements.get_statement_detail(ana.id, a_sid).transactions
+    sears = [t for t in a_tx if t.description == "Sears Metepec"]
+    assert len(sears) == 2 and {t.category for t in sears} == {"hogar"} and all(t.id for t in sears)
+
+    assert statements.set_transaction_category(beto.id, sears[0].id, "salud") == 0      # no es suyo
+    assert statements.set_transaction_category(ana.id, sears[0].id, "salud") == 2
+    assert statements.set_transaction_category(ana.id, sears[1].id, "ropa_cuidado") == 2  # upsert, no duplica
+    assert statements.get_merchant_categories(ana.id, ["sears metepec"]) == {"sears metepec": "ropa_cuidado"}
+    assert statements.get_merchant_categories(beto.id, ["sears metepec"]) == {}
+
+    b_tx = statements.get_statement_detail(beto.id, b_sid).transactions
+    statements.update_categories(beto.id, {sears[0].id: ("salud", "rule"), b_tx[4].id: ("hogar", "rule")})
+    assert next(t for t in statements.get_statement_detail(ana.id, a_sid).transactions if t.id == sears[0].id).category == "ropa_cuidado"
+    assert next(t for t in statements.get_statement_detail(beto.id, b_sid).transactions if t.id == b_tx[4].id).category == "hogar"
+
+    assert [s.id for s in statements.list_statement_details(ana.id)] == [a_sid]
+    assert sorted(statements.list_user_ids_with_statements()) == sorted([ana.id, beto.id])

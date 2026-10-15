@@ -4,9 +4,9 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class TransactionKind(str, Enum):
@@ -20,6 +20,7 @@ class TransactionKind(str, Enum):
 
 
 class Transaction(BaseModel):
+    id: int | None = None  # asignado al guardar
     operation_date: date
     charge_date: date
     description: str
@@ -27,6 +28,14 @@ class Transaction(BaseModel):
     kind: TransactionKind = TransactionKind.PURCHASE
     detail: str | None = None
     currency: str = "MXN"
+    category: str | None = None         # solo compras; ver services/categorizer.CATEGORIES
+    category_source: str | None = None  # user | rule | llm | none
+
+    @computed_field
+    @property
+    def deductible(self) -> bool:
+        """Posible deducción personal (salud, educación): solo es deducible con su CFDI."""
+        return self.category in ("salud", "educacion")
 
 
 class Installment(BaseModel):
@@ -205,3 +214,53 @@ class UserPublic(BaseModel):
     id: int
     username: str
     role: str
+
+
+# ---------------------------------------------------------------------- salud crediticia
+Status = Literal["good", "warn", "bad", "na"]
+
+
+class HealthIndicator(BaseModel):
+    key: str
+    label: str
+    status: Status
+    value: float | None = None      # número base (porcentaje, pesos…) para gráficas
+    display: str                    # valor ya formateado para mostrar
+    detail: str                     # explicación en una frase
+    weight: int = 0                 # peso en el índice (0 = informativo)
+
+
+class CategoryTotal(BaseModel):
+    category: str
+    label: str
+    amount: Decimal
+    share: float                    # % del total de compras
+    essential: bool
+    deductible: bool
+    count: int
+
+
+class MonthPoint(BaseModel):
+    statement_id: int
+    period_end: date
+    utilization: float | None
+    balance: Decimal | None         # pago para no generar intereses
+    purchases: Decimal
+    payments: Decimal
+    finance_cost: Decimal           # intereses + comisiones + IVA
+    score: int | None
+
+
+class CreditHealthReport(BaseModel):
+    statement_id: int | None
+    period_end: date | None
+    score: int | None
+    level: str                      # Saludable | Aceptable | En riesgo | Crítica | Sin datos
+    indicators: list[HealthIndicator] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+    categories: list[CategoryTotal] = Field(default_factory=list)
+    essential_share: float | None = None
+    deductible_total: Decimal = Decimal(0)
+    series: list[MonthPoint] = Field(default_factory=list)
+    months_available: int = 0
+    notes: list[str] = Field(default_factory=list)

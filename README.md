@@ -1,8 +1,15 @@
-# Asistente de estado de cuenta (RAG + LangGraph)
+# Salud crediticia: asistente de estado de cuenta (RAG + LangGraph)
 
-Cargas el PDF del estado de cuenta de tu tarjeta (formato **Nu México**); la app extrae y guarda los datos en
-**PostgreSQL + pgvector** y te deja hacerle preguntas a un LLM que responde usando como contexto lo recuperado de la
-base de datos (**RAG**). Registra **logs, latencia, tokens, costo y errores** de cada llamada.
+El objetivo de la app es **mostrar tu salud financiera crediticia**. Cargas el PDF del estado de cuenta de tu tarjeta
+(formato **Nu México**) y la app:
+
+- calcula un **índice de salud crediticia (0–100)** con semáforos por indicador: uso del crédito, comportamiento de
+  pago, puntualidad, costo del crédito, compromisos fijos y tendencia de la deuda;
+- **clasifica tus compras** por categoría (salud, educación, hogar, entretenimiento…) y marca las que podrían ser
+  deducibles;
+- te da **recomendaciones con montos concretos** y te deja hacer preguntas a un LLM que responde con tus datos (**RAG**).
+
+Los datos se guardan en **PostgreSQL + pgvector**. Registra **logs, latencia, tokens, costo y errores** de cada llamada.
 
 Es **multiusuario**: cada persona crea su cuenta con usuario y contraseña desde la URL de la app (con un código de
 invitación opcional) y solo ve sus propios estados de cuenta, preguntas y métricas.
@@ -50,6 +57,50 @@ flowchart TB
 - **El frontend está separado del backend** (`frontend/`), pero FastAPI lo sirve desde el mismo servicio: en
   producción es un solo deploy, sin CORS.
 
+### Salud crediticia
+
+```mermaid
+flowchart LR
+    S[("Estados de cuenta<br/>del usuario")] --> E["services/credit_health.py<br/>indicadores · índice · recomendaciones"]
+    E --> API["GET /credit-health"] --> UI["Pestaña Salud crediticia"]
+    E --> CTX["report_to_text → contexto del chat"]
+```
+
+Todo se **calcula en código** a partir de los campos que extrae el parser; el LLM solo lo explica.
+
+| Indicador | Cálculo | 🟢 / 🟡 / 🔴 | Peso |
+|---|---|---|---|
+| Uso del crédito | (límite − disponible) / límite | <30% / 30–50% / >50% | 30 |
+| Comportamiento de pago | pagos del mes vs. "pago para no generar intereses" del mes anterior | total / más del mínimo / solo el mínimo o menos | 30 |
+| Puntualidad | pagos hasta la fecha límite anterior ≥ pago mínimo | a tiempo / — / tarde o sin pago | 15 |
+| Costo del crédito | intereses + comisiones + IVA (y últimos 12 meses) | $0 / hay costo / subió >5% | 10 |
+| Compromisos fijos | mensualidades a meses / límite | <10% / 10–25% / >25% | 5 |
+| Tendencia de la deuda | saldo vs. mes anterior | baja ≥5% / ±5% / sube ≥5% | 10 |
+| Gasto contra pago | compras vs. pagos del periodo | informativo | 0 |
+
+- **Índice** = promedio ponderado de los indicadores con datos (🟢 = 1, 🟡 = 0.5, 🔴 = 0). Con menos de 40 puntos de
+  peso evaluables no se calcula (solo semáforos). Niveles: ≥80 Saludable · ≥60 Aceptable · ≥40 En riesgo · <40 Crítica.
+  **Es orientativo: no es el score de Buró de Crédito**, y la app lo dice.
+- Con **un solo mes** el comportamiento de pago se estima con el "adeudo del periodo anterior" del propio PDF;
+  puntualidad y tendencia piden cargar el mes anterior (consecutivo).
+- Los colores de gráficas y semáforos están validados (contraste ≥3:1, separación para daltonismo, modo claro y
+  oscuro) y cada estado lleva además ícono y texto. Las gráficas tienen tooltip, foco con teclado y vista en tabla.
+
+### Clasificación de gastos
+
+Cascada en `services/categorizer.py` (nodo `categorize` del grafo de ingesta, después de descartar duplicados):
+
+1. **Correcciones del usuario** (`merchant_categories`): si marcaste "Sears Metepec → Hogar", se respeta siempre.
+2. **Reglas** por palabra clave para comercios comunes en México (gratis).
+3. **Claude Haiku** con salida estructurada (`output_config` + JSON Schema con `enum`): una llamada por estado de
+   cuenta, solo con los nombres de comercio pendientes, sin montos ni datos personales (~$0.0003 USD).
+4. **Sin clasificar** si la confianza es menor a `CATEGORIZER_MIN_CONFIDENCE`: lo corriges con un clic en Movimientos y
+   la corrección se aplica a todos los cargos de ese comercio y a los futuros.
+
+Categorías: Salud · Educación · Hogar · Entretenimiento · Alimentos y restaurantes · Supermercado · Ropa y cuidado
+personal · Transporte · Servicios y suscripciones · Otros. Salud y Educación se marcan como **posible deducible**
+(solo con CFDI; la app no calcula impuestos). Si el LLM falla, la carga del PDF continúa.
+
 ### Multiusuario (tenant = usuario)
 
 ```mermaid
@@ -96,6 +147,7 @@ flowchart LR
 │   ├── main.py            # CLI + arranque de la GUI + administración de cuentas
 │   ├── api.py             # FastAPI: cuentas, endpoints REST protegidos + sirve frontend/
 │   ├── migrate.py         # python -m app.migrate: aplica migraciones (Alembic)
+│   ├── categorize_backfill.py # python -m app.categorize_backfill: clasifica compras ya cargadas
 │   ├── container.py       # Composition root: crea y conecta todas las dependencias
 │   ├── schemas.py         # Contratos pydantic (ParsedStatement, Chunk, LLMResponse, ...)
 │   ├── core/
@@ -114,6 +166,8 @@ flowchart LR
 │   │   ├── metrics.py     # MetricsService + Stopwatch (latencia, tokens, costo)
 │   │   ├── repository.py  # Única capa que conoce SQLAlchemy (siempre filtra por user_id)
 │   │   ├── auth.py        # AuthService: registro, login, sesiones, límite de intentos
+│   │   ├── categorizer.py # Categorías de gasto: correcciones → reglas → Haiku → sin clasificar
+│   │   ├── credit_health.py # Indicadores, índice 0-100 y recomendaciones (en código)
 │   │   └── assistant.py   # Fachada para API / GUI / CLI + cuotas de uso
 │   ├── pipeline/          # LangGraph
 │   │   ├── state.py       # IngestionState, QAState
@@ -126,8 +180,9 @@ flowchart LR
 │   └── js/
 │       ├── helpers.js     # Formato de fechas, moneda, escape de HTML
 │       ├── app.js         # Estado, llamadas a la API y renderizado
+│       ├── health.js      # Pestaña Salud crediticia: índice, semáforos y gráficas SVG
 │       └── auth.js        # Entrar / crear cuenta / salir / cambiar contraseña; arranque
-├── migrations/            # Alembic: 0001 esquema base, 0002 multiusuario
+├── migrations/            # Alembic: 0001 esquema base, 0002 multiusuario, 0003 categorías
 ├── alembic.ini
 ├── tests/                 # pytest: dobles en fakes.py; test_db.py usa PostgreSQL real
 ├── .github/workflows/ci-cd.yml   # Tests en cada push; deploy a Render desde main
@@ -155,7 +210,10 @@ Todas las rutas de datos requieren sesión (si no, **401**) y operan solo sobre 
 | `GET` | `/statements/{id}` | Detalle: resumen, movimientos, compras a meses |
 | `GET` | `/statements/{id}/overview` | Resumen en texto |
 | `DELETE` | `/statements/{id}` | Elimina un estado de cuenta |
-| `POST` | `/ask` | Pregunta (grafo RAG); **429** si se excede la cuota |
+| `GET` | `/credit-health?statement_id=` | Índice, indicadores, recomendaciones, categorías y series mensuales |
+| `GET` | `/categories` | Catálogo de categorías de gasto |
+| `PATCH` | `/transactions/{id}/category` | Corrige la categoría (y la de todos los cargos de ese comercio) |
+| `POST` | `/ask` | Pregunta (grafo RAG + salud crediticia); **429** si se excede la cuota |
 | `GET` | `/metrics` · `/metrics/recent` | Métricas propias; `?scope=all` (solo admin) de todas las cuentas |
 
 ## Puesta en marcha local
@@ -201,6 +259,9 @@ Ejecuta los comandos desde la carpeta raíz del proyecto (donde está este READM
 | `MAX_ASKS_PER_DAY` · `MAX_UPLOADS_PER_DAY` | `30` · `10` | Por cuenta, día UTC. `0` = sin límite |
 | `LOGIN_MAX_ATTEMPTS` · `LOGIN_WINDOW_MINUTES` | `5` · `15` | Intentos fallidos antes de bloquear |
 | `LOCAL_USER` | `local` | Usuario con el que operan la GUI y la CLI |
+| `CATEGORIZER_LLM` · `CATEGORIZER_MODEL` | `true` · `claude-haiku-5-5` | Clasificación con LLM (requiere `ANTHROPIC_API_KEY`) |
+| `CATEGORIZER_MIN_CONFIDENCE` | `0.6` | Debajo de esto el comercio queda "sin clasificar" |
+| `CATEGORIZER_PRICE_INPUT_PER_MTOK` · `..._OUTPUT_...` | `0.10` · `0.50` | Para registrar el costo de la clasificación |
 | `ADMIN_USERNAME` · `ADMIN_PASSWORD` | `admin` · — | Dueño de los datos previos a la migración multiusuario (solo se usan en ella) |
 | `COOKIE_SECURE` · `EXPOSE_DOCS` | — | Para forzar el comportamiento de cookies / `/docs` sin depender de `APP_ENV` |
 
@@ -243,7 +304,8 @@ flowchart LR
   corre `pytest`. Solo en push a `main` y con tests verdes, llama al Deploy Hook de Render.
 - **`render.yaml`**: servicio web `free`, región `virginia` (cerca de Neon us-east-1), `autoDeploy: false` (el deploy
   lo decide CI), health check en `/health`, `EMBEDDING_PROVIDER=fake`. Al arrancar ejecuta `python -m app.migrate`
-  (el plan free no tiene *pre-deploy command*) y luego uvicorn con `--proxy-headers` para conocer la IP real.
+  (el plan free no tiene *pre-deploy command*), `python -m app.categorize_backfill` (idempotente: clasifica compras
+  que aún no tengan categoría) y luego uvicorn con `--proxy-headers` para conocer la IP real.
 - **CI** tiene dos jobs de pruebas: con dobles (`test`) y con PostgreSQL + pgvector real como *service container*
   (`test-db`: migraciones y filtros por usuario en SQL). El deploy espera a ambos.
 
@@ -317,6 +379,9 @@ pytest
 `tests/test_parser.py` y `tests/test_chunking.py` usan un texto anonimizado (`tests/fixtures/nu_statement_sample.txt`).
 `tests/test_pipeline.py` ejecuta ambos grafos completos con dobles (`tests/fakes.py`): sin PostgreSQL ni APIs.
 `tests/test_auth.py` cubre registro, contraseñas, sesiones (con reloj simulado) y límite de intentos.
+`tests/test_categorizer.py` cubre reglas, la cascada (correcciones → reglas → LLM), confianza baja y fallas del LLM.
+`tests/test_credit_health.py` cubre cada indicador, el índice y los casos de un mes, pago mínimo, pago tardío y meses
+no consecutivos.
 `tests/test_api.py` levanta la API con dos cuentas y verifica aislamiento (404 cruzados), cuotas (429), CSRF y sesiones.
 `tests/test_db.py` corre las migraciones y los filtros por usuario contra PostgreSQL real:
 
@@ -332,3 +397,6 @@ RUN_DB_TESTS=1 DB_SCHEMA=<esquema vacío> pytest tests/test_db.py   # se niega a
 - En Render free la búsqueda usa embeddings `fake` (por palabras clave), menos precisa que la semántica local.
 - El límite de intentos de login vive en memoria: se reinicia con el servicio y supone una sola instancia.
 - Sin recuperación de contraseña por correo ni borrado de cuenta en la interfaz (los hace el admin desde la terminal).
+- Los nombres de comercio en el PDF a veces vienen abreviados ("Vsfa Galerias Metepec"): esos quedan sin clasificar
+  hasta que el usuario los corrige.
+- La GUI de escritorio (Tkinter) todavía no muestra la salud crediticia ni las categorías; están en la web y en el chat.

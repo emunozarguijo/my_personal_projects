@@ -1,6 +1,6 @@
 // Lógica de la interfaz: estado, llamadas a la API y renderizado de vistas.
 const $=s=>document.querySelector(s);
-const state={statements:[],selected:null,detail:null,tab:'resumen',filter:'all',q:'',chats:{},busy:false};
+const state={statements:[],selected:null,detail:null,tab:'salud',filter:'all',cat:'',q:'',chats:{},busy:false,categories:[]};
 
 async function api(path,opts){
   const r=await fetch(path,opts);
@@ -53,8 +53,9 @@ async function select(id,keepTab){
   document.querySelectorAll('.month').forEach(b=>b.setAttribute('aria-current',String(Number(b.dataset.id)===id)));
   try{state.detail=await api('/statements/'+id);}
   catch(e){toast(e.message,'bad');return;}
-  state.filter='all';state.q='';
+  state.filter='all';state.cat='';state.q='';
   renderHeader();renderResumen();renderTx();renderChat();
+  if(state.tab==='salud')loadHealth();
   if(!keepTab)setTab(state.tab);
 }
 function renderHeader(){
@@ -174,19 +175,21 @@ function renderTx(){
   const d=state.detail;if(!d)return;
   const q=state.q.trim().toLowerCase();
   const pred=FILTERS.find(f=>f[0]===state.filter)[2];
-  const rows=d.transactions.filter(t=>pred(t)&&(!q||(t.description+' '+(t.detail||'')).toLowerCase().includes(q)));
+  const rows=d.transactions.filter(t=>pred(t)&&(!state.cat||(state.cat==='sin_clasificar'?t.kind==='purchase'&&(!t.category||t.category==='sin_clasificar'):t.category===state.cat))&&(!q||(t.description+' '+(t.detail||'')).toLowerCase().includes(q)));
   let h='<div class="toolbar">'+FILTERS.map(f=>{
       const n=d.transactions.filter(f[2]).length;
       return '<button class="chip" type="button" data-f="'+f[0]+'" aria-pressed="'+(state.filter===f[0])+'">'+f[1]+'<small>'+n+'</small></button>';
     }).join('')
+    +'<select class="search" id="catf" aria-label="Filtrar por categoría"><option value="">Todas las categorías</option>'
+    +[...state.categories,{key:'sin_clasificar',label:'Sin clasificar'}].map(c=>'<option value="'+c.key+'"'+(state.cat===c.key?' selected':'')+'>'+esc(c.label)+'</option>').join('')+'</select>'
     +'<input class="search" id="search" type="search" placeholder="Buscar comercio" aria-label="Buscar comercio" value="'+esc(state.q)+'"></div>';
-  h+='<div class="tx-wrap"><table><thead><tr><th>Fecha</th><th>Descripción</th><th>Tipo</th><th class="r">Monto</th></tr></thead><tbody>';
-  if(!rows.length)h+='<tr><td colspan="4" class="small">No hay movimientos con ese filtro.</td></tr>';
+  h+='<div class="tx-wrap"><table><thead><tr><th>Fecha</th><th>Descripción</th><th>Tipo</th><th>Categoría</th><th class="r">Monto</th></tr></thead><tbody>';
+  if(!rows.length)h+='<tr><td colspan="5" class="small">No hay movimientos con ese filtro.</td></tr>';
   let net=0;
   for(const t of rows){
     const a=Number(t.amount);net+=a;
     h+='<tr><td class="num" style="white-space:nowrap">'+fmtDate(t.operation_date)+'</td><td>'+esc(t.description)+(t.detail?'<span class="d">'+esc(t.detail)+'</span>':'')+'</td>'
-      +'<td><span class="pill '+t.kind+'">'+(KIND[t.kind]||'Otro')+'</span></td>'
+      +'<td><span class="pill '+t.kind+'">'+(KIND[t.kind]||'Otro')+'</span></td>'+'<td>'+catCell(t)+'</td>'
       +'<td class="r '+(a<0?'pos':'')+'">'+(a<0?'−':'')+money(Math.abs(a))+'</td></tr>';
   }
   h+='</tbody></table></div><div class="tx-foot"><span>'+rows.length+' de '+d.transactions.length+' movimientos</span><span>Suma de lo que ves: <b class="num">'+(net<0?'−':'')+money(Math.abs(net))+'</b></span></div>';
@@ -195,6 +198,23 @@ function renderTx(){
   if(document.activeElement&&document.activeElement.id==='search'){s.focus();s.setSelectionRange(s.value.length,s.value.length);}
 }
 $('#v-movimientos').addEventListener('click',e=>{const c=e.target.closest('.chip');if(c){state.filter=c.dataset.f;renderTx();}});
+function catCell(t){
+  if(t.kind!=='purchase'||t.id==null)return '';
+  const opts=(t.category==='sin_clasificar'||!t.category?'<option value="" selected>Sin clasificar</option>':'')
+    +state.categories.map(c=>'<option value="'+c.key+'"'+(t.category===c.key?' selected':'')+'>'+esc(c.label)+'</option>').join('');
+  return '<select class="cat-select" data-tx="'+t.id+'" aria-label="Categoría de '+esc(t.description)+'">'+opts+'</select>'
+    +(t.deductible?'<span class="tag">posible deducible</span>':'');
+}
+$('#v-movimientos').addEventListener('change',async e=>{
+  if(e.target.id==='catf'){state.cat=e.target.value;renderTx();return;}
+  const sel=e.target.closest('.cat-select');if(!sel||!sel.value)return;
+  try{
+    const r=await api('/transactions/'+sel.dataset.tx+'/category',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({category:sel.value})});
+    toast(r.updated>1?'Listo: se aplicó a '+r.updated+' movimientos de ese comercio y a los próximos.':'Categoría guardada; se aplicará a ese comercio en adelante.','ok');
+    await select(state.selected,true);
+  }catch(ex){toast(ex.message,'bad');}
+});
+async function loadCategories(){try{state.categories=await api('/categories');}catch(e){state.categories=[];}}
 $('#v-movimientos').addEventListener('input',e=>{if(e.target.id==='search'){state.q=e.target.value;const pos=e.target.selectionStart;renderTx();const s=$('#search');s.focus();s.setSelectionRange(pos,pos);}});
 
 /* ---------- Chat ---------- */
@@ -273,8 +293,9 @@ async function loadMetrics(){
 function setTab(name){
   state.tab=name;
   document.querySelectorAll('.tab').forEach(t=>t.setAttribute('aria-selected',String(t.dataset.tab===name)));
-  for(const t of ['resumen','movimientos','preguntar','metricas'])$('#v-'+t).hidden=t!==name;
+  for(const t of ['salud','resumen','movimientos','preguntar','metricas'])$('#v-'+t).hidden=t!==name;
   if(name==='metricas')loadMetrics();
+  if(name==='salud')loadHealth();
   if(name==='preguntar'){const c=$('#chat');c.scrollTop=c.scrollHeight;$('#q').focus();}
 }
 document.querySelector('.tabs').addEventListener('click',e=>{const t=e.target.closest('.tab');if(t)setTab(t.dataset.tab);});

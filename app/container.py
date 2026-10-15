@@ -10,13 +10,31 @@ from app.pipeline.graph import build_ingestion_graph, build_qa_graph
 from app.pipeline.nodes import IngestionNodes, QANodes
 from app.services.assistant import StatementAssistant, UsageLimits
 from app.services.auth import AuthService, LoginThrottle
+from app.services.categorizer import AnthropicCategoryClassifier, TransactionCategorizer
 from app.services.chunking import StatementChunker
+from app.services.credit_health import build_report, report_to_text
 from app.services.embeddings import EmbeddingService, build_provider
 from app.services.llm import LLMService, build_llm_provider
 from app.services.metrics import MetricsService
 from app.services.pdf_parser import PdfTextExtractor
 from app.services.repository import MetricsRepository, StatementRepository, UserRepository
 from app.services.retrieval import Retriever
+
+
+def build_categorizer(settings: Settings, overrides, metrics: MetricsService) -> TransactionCategorizer:
+    """Reglas siempre; LLM (Haiku) solo si está habilitado y hay API key de Anthropic."""
+    classifier = None
+    if settings.categorizer_llm and settings.anthropic_api_key:
+        classifier = AnthropicCategoryClassifier(
+            api_key=settings.anthropic_api_key.get_secret_value(),
+            model=settings.categorizer_model,
+            metrics=metrics,
+            price_in=settings.categorizer_price_input_per_mtok,
+            price_out=settings.categorizer_price_output_per_mtok,
+            timeout=settings.llm_timeout_s,
+            max_retries=settings.llm_max_retries,
+        )
+    return TransactionCategorizer(overrides, classifier, settings.categorizer_min_confidence)
 
 
 @dataclass
@@ -49,10 +67,15 @@ def build_services(settings: Settings | None = None, check_db: bool = True) -> A
         embeddings=embeddings,
         chunker=StatementChunker(settings.chunk_tx_per_chunk, settings.redact_pii),
         max_mb=settings.max_pdf_mb,
+        categorizer=build_categorizer(settings, statements, metrics),
     )
+
+    def insights(user_id: int, statement_id: int | None) -> str:
+        return report_to_text(build_report(statements.list_statement_details(user_id), statement_id))
+
     assistant = StatementAssistant(
         ingestion_graph=build_ingestion_graph(ingestion_nodes),
-        qa_graph=build_qa_graph(QANodes(retriever, llm)),
+        qa_graph=build_qa_graph(QANodes(retriever, llm, insights=insights)),
         statements=statements,
         metrics_repo=metrics_repo,
         metrics=metrics,
