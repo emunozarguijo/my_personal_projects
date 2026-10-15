@@ -14,10 +14,11 @@ from app.services.categorizer import AnthropicCategoryClassifier, TransactionCat
 from app.services.chunking import StatementChunker
 from app.services.credit_health import build_report, report_to_text
 from app.services.embeddings import EmbeddingService, build_provider
+from app.services.finance import FinanceService, summary_to_text
 from app.services.llm import LLMService, build_llm_provider
 from app.services.metrics import MetricsService
 from app.services.pdf_parser import PdfTextExtractor
-from app.services.repository import MetricsRepository, StatementRepository, UserRepository
+from app.services.repository import FinanceRepository, MetricsRepository, StatementRepository, UserRepository
 from app.services.retrieval import Retriever
 
 
@@ -41,6 +42,7 @@ def build_categorizer(settings: Settings, overrides, metrics: MetricsService) ->
 class AppServices:
     assistant: StatementAssistant
     auth: AuthService
+    finance: FinanceService | None = None
 
 
 def build_services(settings: Settings | None = None, check_db: bool = True) -> AppServices:
@@ -70,8 +72,11 @@ def build_services(settings: Settings | None = None, check_db: bool = True) -> A
         categorizer=build_categorizer(settings, statements, metrics),
     )
 
+    finance = FinanceService(FinanceRepository(db), statements, settings.max_manual_entries_per_day)
+
     def insights(user_id: int, statement_id: int | None) -> str:
-        return report_to_text(build_report(statements.list_statement_details(user_id), statement_id))
+        credit = report_to_text(build_report(statements.list_statement_details(user_id), statement_id))
+        return f"{credit}\n\n{summary_to_text(finance.month(user_id))}"
 
     assistant = StatementAssistant(
         ingestion_graph=build_ingestion_graph(ingestion_nodes),
@@ -93,4 +98,4 @@ def build_services(settings: Settings | None = None, check_db: bool = True) -> A
         invite_code=invite or None,
         max_users=settings.max_users,
     )
-    return AppServices(assistant=assistant, auth=auth)
+    return AppServices(assistant=assistant, auth=auth, finance=finance)

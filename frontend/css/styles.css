@@ -1,28 +1,24 @@
 :root{
-  --paper:#f5f3f9; --panel:#ffffff; --ink:#1d1633; --ink-2:#5e5675; --line:#e4dff0; --line-2:#efecf6;
+  /* Tema único claro: fondo gris neutro, texto morado (contraste 11.7:1 y 5.4:1 sobre el gris). */
+  color-scheme:light;
+  --paper:#f3f4f6; --panel:#ffffff; --ink:#3b1d78; --ink-2:#6b5a94; --line:#e2e3ea; --line-2:#eef0f4;
   --jacaranda:#6a3fc2; --jacaranda-ink:#ffffff; --jacaranda-wash:#ece6fa;
   --marigold:#f0a500; --marigold-wash:#fff3d1; --marigold-ink:#6b4700;
   --ok:#1f8a5b; --ok-wash:#dff3e8; --bad:#b83232; --bad-wash:#fbe3e3;
   --display:'Bricolage Grotesque','Segoe UI',system-ui,sans-serif;
   --text:'Figtree','Segoe UI',system-ui,sans-serif;
-  --r:10px;
+  --r:14px;
+  --shadow:0 1px 2px rgba(59,29,120,.06),0 6px 20px rgba(59,29,120,.06);
   /* Marcas de gráficas y semáforos (validadas: contraste >= 3:1, separación CVD y luminosidad) */
   --mark-good:#1f8a5b; --mark-warn:#b97c00; --mark-bad:#b83232; --mark-accent:#6a3fc2;
-}
-@media (prefers-color-scheme:dark){
-  :root{
-    --paper:#141024; --panel:#1c1631; --ink:#f1edfb; --ink-2:#a79fc4; --line:#2d2547; --line-2:#251e3c;
-    --jacaranda:#a98bf2; --jacaranda-ink:#17102a; --jacaranda-wash:#2b2150;
-    --marigold:#f5b83a; --marigold-wash:#3a2d10; --marigold-ink:#f5d58a;
-    --ok:#4cc38a; --ok-wash:#17332a; --bad:#f07a7a; --bad-wash:#3a1d22;
-    --mark-good:#33a06e; --mark-warn:#c08614; --mark-bad:#cf4470; --mark-accent:#8a68e0;
-  }
 }
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 html,body{height:100%}
 body{margin:0;background:var(--paper);color:var(--ink);font:400 15px/1.5 var(--text);-webkit-font-smoothing:antialiased}
-button,input,textarea{font:inherit;color:inherit}
+button,input,textarea,select{font:inherit;color:inherit}
+select{color:var(--ink);background-color:var(--panel);cursor:pointer}
+option{color:var(--ink);background:#fff}
 :focus-visible{outline:3px solid var(--jacaranda);outline-offset:2px}
 .num{font-variant-numeric:tabular-nums}
 
@@ -282,3 +278,46 @@ tr.best td{background:var(--ok-wash)}
   .hero-health{grid-template-columns:1fr}
   .cat-row{grid-template-columns:1fr;gap:4px}
 }
+
+/* ---------- Mi mes ---------- */
+/* Sin estados de cuenta, "Mi mes" sigue disponible: solo se ocultan las pestañas que dependen de un PDF. */
+.is-empty .tabs{display:flex}
+.is-empty .tab:not([data-tab="mes"]){display:none}
+.is-empty.on-mes .welcome{display:none}
+.is-empty.on-mes #v-mes:not([hidden]){display:block}
+.on-mes .top{display:none}
+.welcome-alt{display:block;margin:14px auto 0;color:var(--ink)}
+.welcome-alt:hover{border-color:var(--jacaranda);color:var(--ink)}
+#v-mes.loading{opacity:.55;transition:opacity .2s}
+.month-nav{display:flex;align-items:center;gap:14px;margin-bottom:18px}
+.month-nav h2{font:700 24px/1.1 var(--display);margin:0;min-width:190px;text-align:center}
+.month-nav .icon-btn{font-size:20px;line-height:1;padding:6px 14px;color:var(--ink)}
+.month-nav .icon-btn:hover{border-color:var(--jacaranda);color:var(--ink)}
+.quick-add{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;margin-bottom:28px;display:grid;gap:12px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:99px;padding:3px;gap:3px;justify-self:start}
+.seg button{background:none;border:0;border-radius:99px;padding:6px 14px;font-weight:600;cursor:pointer;color:var(--ink-2)}
+.seg button[aria-pressed="true"]{background:var(--jacaranda);color:var(--jacaranda-ink)}
+.qa-grid{display:grid;grid-template-columns:140px minmax(0,1fr) 200px 160px;gap:12px}
+.quick-add label{display:flex;flex-direction:column;gap:5px;font-size:13px;font-weight:600}
+.quick-add input,.quick-add select{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:10px 12px;font-weight:400;min-width:0}
+.quick-add label.check{flex-direction:row;align-items:center;gap:8px;font-weight:500}
+.quick-add .btn{justify-self:start}
+.month-strip{margin-top:24px;border-bottom:0;padding-bottom:6px}
+.pill.src-efectivo{background:var(--marigold-wash);color:var(--marigold-ink)}
+.pill.src-nu{background:var(--jacaranda-wash);color:var(--ink)}
+.pill.src-ingreso{background:var(--ok-wash);color:var(--ok)}
+@media (max-width:900px){
+  .qa-grid{grid-template-columns:1fr 1fr}
+  .month-nav h2{font-size:20px;min-width:0;flex:1}
+}
+
+/* ---------- Estilo amable: tarjetas suaves e íconos de categoría ---------- */
+.ind,.quick-add,.auth-card,.dlg,.tx-wrap{box-shadow:var(--shadow);border-color:transparent}
+.ind{border-radius:var(--r)}
+.rail{box-shadow:1px 0 0 var(--line)}
+.cat-ico{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--jacaranda-wash);
+  font-size:15px;line-height:1;margin-right:8px;flex:none;vertical-align:middle}
+.cat-name{display:flex;align-items:center;flex-wrap:wrap;gap:2px}
+.cat-cell{display:inline-flex;align-items:center;gap:2px}
+.tab .ti,.seg .ti{margin-right:6px}
+.welcome-art{font-size:46px;line-height:1;margin-bottom:14px;letter-spacing:6px}

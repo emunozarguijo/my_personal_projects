@@ -264,3 +264,68 @@ class CreditHealthReport(BaseModel):
     series: list[MonthPoint] = Field(default_factory=list)
     months_available: int = 0
     notes: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------- finanzas del mes (registro manual)
+IncomeKind = Literal["salario", "honorarios", "otros"]
+
+
+class IncomeItem(BaseModel):
+    id: int
+    date: date
+    amount: Decimal
+    kind: str
+    description: str = ""
+    recurring: bool = False
+    end_date: date | None = None
+
+
+class CashExpenseItem(BaseModel):
+    id: int
+    date: date
+    amount: Decimal
+    description: str = ""
+    category: str
+    category_source: str = "user"
+
+
+class MonthCategory(BaseModel):
+    category: str
+    label: str
+    total: Decimal
+    cash: Decimal
+    nu: Decimal
+    share: float          # % del gasto del mes
+    essential: bool
+    deductible: bool
+
+
+class MonthMovement(BaseModel):
+    source: Literal["efectivo", "nu", "ingreso"]
+    id: int | None        # id del gasto en efectivo / ingreso (editable) o del cargo Nu (solo lectura)
+    date: date
+    description: str
+    amount: Decimal       # positivo; ingresos y gastos se distinguen por `source`
+    category: str | None = None
+    recurring: bool = False
+
+
+class MonthlySummary(BaseModel):
+    month: str                                   # YYYY-MM
+    income_total: Decimal
+    cash_total: Decimal
+    nu_total: Decimal                            # compras con Nu (por fecha de operación)
+    finance_cost: Decimal                        # intereses + comisiones + IVA de Nu cargados en el mes
+    expense_total: Decimal                       # efectivo + Nu + costo financiero
+    balance: Decimal                             # ingresos − gastos
+    savings_rate: float | None
+    card_payments: Decimal                       # pagos a la tarjeta (informativo: no son gasto)
+    incomes: list[IncomeItem] = Field(default_factory=list)
+    categories: list[MonthCategory] = Field(default_factory=list)
+    movements: list[MonthMovement] = Field(default_factory=list)
+    score: int | None = None
+    level: str = "Sin datos suficientes"
+    indicators: list[HealthIndicator] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+    nu_covered_until: date | None = None         # último día del mes con cargos Nu ya cargados
+    notes: list[str] = Field(default_factory=list)

@@ -185,3 +185,34 @@ def test_categories_in_sql_are_isolated_and_upserted(ctx, repos, parsed):
 
     assert [s.id for s in statements.list_statement_details(ana.id)] == [a_sid]
     assert sorted(statements.list_user_ids_with_statements()) == sorted([ana.id, beto.id])
+
+
+def test_finance_repository_in_sql(ctx, repos):
+    from datetime import date, datetime, timedelta, timezone
+    from decimal import Decimal
+
+    from app.services.repository import FinanceRepository
+
+    _, db, _, _ = ctx
+    _, _, users = repos
+    ana, beto = users.create("ana", None), users.create("beto", None)
+    fin = FinanceRepository(db)
+    oct1, oct31, nov1, nov30 = date(2026, 10, 1), date(2026, 10, 31), date(2026, 11, 1), date(2026, 11, 30)
+
+    salary = fin.add_income(ana.id, date=date(2026, 9, 15), amount=Decimal("20000"), kind="salario",
+                            description="Sueldo", recurring=True, end_date=oct31)  # fmt: skip
+    bonus = fin.add_income(ana.id, date=date(2026, 10, 20), amount=Decimal("3000"), kind="otros",
+                           description="Bono", recurring=False, end_date=None)  # fmt: skip
+    fin.add_income(beto.id, date=oct1, amount=Decimal("9999"), kind="salario", description="", recurring=True, end_date=None)
+    assert {i.id for i in fin.incomes_for_range(ana.id, oct1, oct31)} == {salary.id, bonus.id}
+    assert fin.incomes_for_range(ana.id, nov1, nov30) == []          # el recurrente terminó el 31/10
+
+    e = fin.add_cash_expense(ana.id, date=date(2026, 10, 5), amount=Decimal("120.50"), description="Taxi",
+                             category="transporte", category_source="user")  # fmt: skip
+    assert [x.id for x in fin.cash_for_range(ana.id, oct1, oct31)] == [e.id]
+    assert fin.cash_for_range(beto.id, oct1, oct31) == []
+    assert fin.update_cash_expense(beto.id, e.id, category="salud") is None
+    assert fin.update_cash_expense(ana.id, e.id, category="salud").category == "salud"
+    assert fin.delete_cash_expense(beto.id, e.id) is False and fin.delete_income(beto.id, salary.id) is False
+    assert fin.count_created_since(ana.id, datetime.now(timezone.utc) - timedelta(hours=1)) == 3
+    assert fin.delete_cash_expense(ana.id, e.id) is True

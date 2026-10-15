@@ -107,8 +107,9 @@ class InMemoryRepo:
         return [
             StatementSummary(id=sid, filename=st.filename, **st.parsed.model_dump(
                 include={"card_last4", "period_start", "period_end", "due_date", "pay_no_interest"}))
-            for sid, st in self.statements.items() if st.user_id == user_id
-        ]  # fmt: skip
+            for sid, st in sorted(self.statements.items(), key=lambda kv: kv[1].parsed.period_end, reverse=True)
+            if st.user_id == user_id
+        ]  # fmt: skip  (más reciente primero, como StatementRepository)
 
     def get_statement_detail(self, user_id, sid):
         st = self._own(user_id, sid)
@@ -239,3 +240,82 @@ class FakeLLMProvider(LLMProvider):
             raise RuntimeError("boom")
         self.last_messages = messages
         return "Debes pagar $17,510.97 antes del 21/09/2026 [1].", TokenUsage(input_tokens=1200, output_tokens=40)
+
+
+class InMemoryFinanceRepo:
+    """Misma interfaz que FinanceRepository."""
+
+    def __init__(self):
+        from datetime import datetime, timezone
+
+        self._now = lambda: datetime.now(timezone.utc)
+        self.incomes: dict[int, tuple[int, object]] = {}
+        self.cash: dict[int, tuple[int, object]] = {}
+        self.created: list[tuple[int, object]] = []
+        self._next = 1
+
+    def _id(self):
+        self._next += 1
+        return self._next - 1
+
+    def add_income(self, user_id, **f):
+        from app.schemas import IncomeItem
+
+        item = IncomeItem(id=self._id(), **f)
+        self.incomes[item.id] = (user_id, item)
+        self.created.append((user_id, self._now()))
+        return item
+
+    def update_income(self, user_id, income_id, **f):
+        found = self.incomes.get(income_id)
+        if not found or found[0] != user_id:
+            return None
+        item = found[1].model_copy(update=f)
+        self.incomes[income_id] = (user_id, item)
+        return item
+
+    def delete_income(self, user_id, income_id):
+        if self.incomes.get(income_id, (None,))[0] != user_id:
+            return False
+        del self.incomes[income_id]
+        return True
+
+    def incomes_for_range(self, user_id, start, end):
+        out = []
+        for uid, i in self.incomes.values():
+            if uid != user_id:
+                continue
+            if (not i.recurring and start <= i.date <= end) or (
+                i.recurring and i.date <= end and (i.end_date is None or i.end_date >= start)
+            ):
+                out.append(i)
+        return sorted(out, key=lambda i: (i.date, i.id))
+
+    def add_cash_expense(self, user_id, **f):
+        from app.schemas import CashExpenseItem
+
+        item = CashExpenseItem(id=self._id(), **f)
+        self.cash[item.id] = (user_id, item)
+        self.created.append((user_id, self._now()))
+        return item
+
+    def update_cash_expense(self, user_id, expense_id, **f):
+        found = self.cash.get(expense_id)
+        if not found or found[0] != user_id:
+            return None
+        item = found[1].model_copy(update=f)
+        self.cash[expense_id] = (user_id, item)
+        return item
+
+    def delete_cash_expense(self, user_id, expense_id):
+        if self.cash.get(expense_id, (None,))[0] != user_id:
+            return False
+        del self.cash[expense_id]
+        return True
+
+    def cash_for_range(self, user_id, start, end):
+        return sorted((e for uid, e in self.cash.values() if uid == user_id and start <= e.date <= end),
+                      key=lambda e: (e.date, e.id))  # fmt: skip
+
+    def count_created_since(self, user_id, since):
+        return sum(1 for uid, when in self.created if uid == user_id and when >= since)

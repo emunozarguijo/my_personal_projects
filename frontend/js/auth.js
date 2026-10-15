@@ -36,7 +36,7 @@ function enterApp(user){
   state.user=user;
   $('#account-name').textContent=user.username+(user.role==='admin'?' · admin':'');
   $('#auth').hidden=true;$('#shell').hidden=false;
-  loadCategories().then(()=>loadStatements());
+  loadCategories().then(()=>loadStatements()).then(()=>setTab(state.tab));
 }
 
 // Llamada desde api() (app.js) cuando el servidor responde 401 a mitad del uso.

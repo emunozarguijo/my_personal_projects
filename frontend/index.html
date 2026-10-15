@@ -60,9 +60,11 @@
   <main class="main">
     <section class="welcome">
       <div>
+        <div class="welcome-art" aria-hidden="true">💳💵📈</div>
         <h1>Empieza con tu estado de cuenta</h1>
         <p>Carga el PDF de tu tarjeta. Verás cuánto pagar y cuándo, en qué gastaste y podrás hacerle preguntas. Cada mes que cargues se suma a tu historial.</p>
         <button class="btn" id="welcome-btn" type="button">Elegir PDF</button>
+        <button class="icon-btn welcome-alt" id="welcome-mes" type="button">O registra tus ingresos y gastos en efectivo</button>
       </div>
     </section>
 
@@ -75,14 +77,16 @@
     </header>
 
     <div class="tabs" role="tablist">
-      <button class="tab" role="tab" data-tab="salud" aria-selected="true">Salud crediticia</button>
-      <button class="tab" role="tab" data-tab="resumen" aria-selected="false">Resumen</button>
-      <button class="tab" role="tab" data-tab="movimientos" aria-selected="false">Movimientos</button>
-      <button class="tab" role="tab" data-tab="preguntar" aria-selected="false">Preguntar</button>
-      <button class="tab" role="tab" data-tab="metricas" aria-selected="false">Métricas</button>
+      <button class="tab" role="tab" data-tab="mes" aria-selected="true"><span class="ti" aria-hidden="true">📅</span>Mi mes</button>
+      <button class="tab" role="tab" data-tab="salud" aria-selected="false"><span class="ti" aria-hidden="true">📈</span>Salud crediticia</button>
+      <button class="tab" role="tab" data-tab="resumen" aria-selected="false"><span class="ti" aria-hidden="true">🧾</span>Resumen</button>
+      <button class="tab" role="tab" data-tab="movimientos" aria-selected="false"><span class="ti" aria-hidden="true">📋</span>Movimientos</button>
+      <button class="tab" role="tab" data-tab="preguntar" aria-selected="false"><span class="ti" aria-hidden="true">💬</span>Preguntar</button>
+      <button class="tab" role="tab" data-tab="metricas" aria-selected="false"><span class="ti" aria-hidden="true">📊</span>Métricas</button>
     </div>
 
-    <section class="view" id="v-salud"></section>
+    <section class="view" id="v-mes"></section>
+    <section class="view" id="v-salud" hidden></section>
     <section class="view" id="v-resumen" hidden></section>
     <section class="view" id="v-movimientos" hidden></section>
     <section class="view view--chat" id="v-preguntar" hidden>
@@ -115,6 +119,7 @@
 <script src="/static/js/helpers.js"></script>
 <script src="/static/js/app.js"></script>
 <script src="/static/js/health.js"></script>
+<script src="/static/js/finance.js"></script>
 <script src="/static/js/auth.js"></script>
 </body>
 </html>

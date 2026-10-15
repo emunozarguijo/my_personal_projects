@@ -47,6 +47,17 @@ class FakeClassifier:
     ("COLEGIATURA OCT", "educacion"),
     ("Apple.Com/Bill", "servicios"),
     ("Dor Gaynor Metepec", None),
+    # palabras de uso diario en gastos en efectivo
+    ("Mercado", "supermercado"),
+    ("Mercado Libre", "hogar"),                   # no confundir con el mercado
+    ("Supermercado", "supermercado"),
+    ("Pan", "supermercado"),
+    ("Panda Express Galerias", "alimentos"),      # "pan" no debe atrapar a Panda
+    ("Taxi", "transporte"),
+    ("Comida corrida", "alimentos"),
+    ("Pago de luz", "servicios"),
+    ("Renta", "hogar"),
+    ("Papelería", "hogar"),                       # no es Educación: no debe marcarse como posible deducible
 ])
 def test_rules(description, expected):
     assert rule_category(normalize_merchant(description)) == expected

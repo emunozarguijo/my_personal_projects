@@ -18,7 +18,8 @@ from app.services.embeddings import EmbeddingService, FakeEmbeddingProvider
 from app.services.llm import LLMService
 from app.services.metrics import MetricsService
 from app.services.retrieval import Retriever
-from tests.fakes import FakeExtractor, FakeLLMProvider, InMemoryRepo, InMemoryUserRepo, ListSink
+from app.services.finance import FinanceService
+from tests.fakes import FakeExtractor, FakeLLMProvider, InMemoryFinanceRepo, InMemoryRepo, InMemoryUserRepo, ListSink
 
 PDF = ("estado.pdf", b"%PDF-1.7 fake", "application/pdf")
 PASSWORD = "una-clave-larga"
@@ -39,7 +40,7 @@ def services():
         limits=UsageLimits(max_asks_per_day=2, max_uploads_per_day=5, max_statements_per_user=3),
     )  # fmt: skip
     auth = AuthService(InMemoryUserRepo(), LoginThrottle(3, 900), invite_code=INVITE, max_users=10)
-    return AppServices(assistant=assistant, auth=auth)
+    return AppServices(assistant=assistant, auth=auth, finance=FinanceService(InMemoryFinanceRepo(), repo))
 
 
 @pytest.fixture
@@ -230,3 +231,69 @@ def test_categories_catalog(ana):
     keys = [c["key"] for c in cats]
     assert "salud" in keys and "sin_clasificar" not in keys
     assert next(c for c in cats if c["key"] == "educacion")["deductible"] is True
+
+
+# ------------------------------------------------------------------ finanzas del mes
+def test_finance_requires_session(app):
+    with TestClient(app) as anon:
+        assert anon.get("/finance/month").status_code == 401
+        assert anon.post("/cash-expenses", json={"date": "2026-10-01", "amount": "10"}).status_code == 401
+
+
+def test_manual_finance_flow_and_isolation(ana, beto):
+    r = ana.post("/incomes", json={"date": "2026-10-01", "amount": "20000", "kind": "salario", "recurring": True})
+    assert r.status_code == 201
+    inc_id = r.json()["id"]
+    e = ana.post("/cash-expenses", json={"date": "2026-10-03", "amount": "350.50", "description": "Farmacia Similares"}).json()
+    assert e["category"] == "salud" and e["category_source"] == "rule"
+
+    m = ana.get("/finance/month?month=2026-10").json()
+    assert m["income_total"] == "20000.00" and m["cash_total"] == "350.50"
+    assert m["savings_rate"] == pytest.approx((20000 - 350.5) / 20000 * 100)
+    assert {x["source"] for x in m["movements"]} == {"ingreso", "efectivo"}
+    assert ana.get("/finance/month?month=2026-11").json()["income_total"] == "20000.00"   # recurrente
+
+    assert beto.get("/finance/month?month=2026-10").json()["movements"] == []
+    assert beto.delete(f"/cash-expenses/{e['id']}").status_code == 404
+    assert beto.patch(f"/incomes/{inc_id}", json={"amount": "1"}).status_code == 404
+
+    assert ana.patch(f"/cash-expenses/{e['id']}", json={"category": "hogar"}).json()["category"] == "hogar"
+    assert ana.patch(f"/incomes/{inc_id}", json={"end_date": "2026-10-31"}).status_code == 200
+    assert ana.get("/finance/month?month=2026-11").json()["income_total"] == "0"
+    assert ana.delete(f"/cash-expenses/{e['id']}").status_code == 204
+
+
+def test_manual_finance_validation(ana):
+    assert ana.post("/cash-expenses", json={"date": "2026-10-01", "amount": "-5"}).status_code == 422
+    assert ana.post("/cash-expenses", json={"date": "2026-10-01", "amount": "5", "category": "casino"}).status_code == 422
+    assert ana.post("/incomes", json={"date": "2026-10-01", "amount": "5", "kind": "loteria"}).status_code == 422
+    assert ana.get("/finance/month?month=2026-13").status_code == 422
+
+
+def test_month_includes_nu_purchases(ana):
+    _upload(ana)  # estado de cuenta del 10/08 al 09/09/2026
+    m = ana.get("/finance/month?month=2026-08").json()
+    assert float(m["nu_total"]) > 0 and float(m["card_payments"]) == pytest.approx(11553.87)
+    assert any(x["source"] == "nu" for x in m["movements"])
+
+
+def test_frontend_is_always_revalidated(app):
+    with TestClient(app) as c:
+        for path in ("/", "/static/js/helpers.js", "/static/css/styles.css"):
+            r = c.get(path)
+            assert r.status_code == 200 and r.headers["cache-control"] == "no-cache", path
+        etag = c.get("/static/js/helpers.js").headers["etag"]
+        assert c.get("/static/js/helpers.js", headers={"If-None-Match": etag}).status_code == 304
+        assert "cache-control" not in c.get("/health").headers
+
+
+def test_assets_are_versioned_by_content(app, monkeypatch):
+    import app.api as api_module
+
+    with TestClient(app) as c:
+        html = c.get("/").text
+        versions = set(__import__("re").findall(r'/static/[^"]+\.(?:js|css)\?v=([0-9a-f]{10})"', html))
+        assert len(versions) == 1                          # todos los archivos con la misma huella
+        assert '/static/js/helpers.js"' not in html          # ninguno sin versión
+        monkeypatch.setattr(api_module, "assets_version", lambda: "0123456789")
+        assert "/static/js/finance.js?v=0123456789" in c.get("/").text   # cambia cuando cambian los archivos

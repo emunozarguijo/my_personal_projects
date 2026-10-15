@@ -1,7 +1,11 @@
 # Salud crediticia: asistente de estado de cuenta (RAG + LangGraph)
 
-El objetivo de la app es **mostrar tu salud financiera crediticia**. Cargas el PDF del estado de cuenta de tu tarjeta
+El objetivo de la app es **mostrar tu salud financiera**: la de tu tarjeta de crédito y la de tu mes completo.
+Registras a mano tus **ingresos** y tus **gastos en efectivo**, cargas el PDF del estado de cuenta de tu tarjeta
 (formato **Nu México**) y la app:
+
+- arma tu **panorama del mes calendario**: cuánto ganaste, cuánto gastaste en efectivo y con Nu, cuánto te sobró y tu
+  tasa de ahorro, con un **índice de salud financiera (0–100)**;
 
 - calcula un **índice de salud crediticia (0–100)** con semáforos por indicador: uso del crédito, comportamiento de
   pago, puntualidad, costo del crédito, compromisos fijos y tendencia de la deuda;
@@ -56,6 +60,36 @@ flowchart TB
   reemplazar o probar por separado.
 - **El frontend está separado del backend** (`frontend/`), pero FastAPI lo sirve desde el mismo servicio: en
   producción es un solo deploy, sin CORS.
+
+### Mi mes: ingresos, efectivo y tarjeta Nu
+
+```mermaid
+flowchart LR
+    M["Registro manual<br/>ingresos · efectivo"] --> F["services/finance.py<br/>mes calendario"]
+    P[("Estados de cuenta Nu")] --> F
+    F --> API["GET /finance/month"] --> UI["Pestaña Mi mes"]
+    F --> CTX["summary_to_text → contexto del chat"]
+```
+
+- **A mano** se registran solo **ingresos** (salario, honorarios u otros; "se repite cada mes" para el sueldo) y
+  **gastos en efectivo** (la categoría se sugiere sola con las reglas de comercios; se puede cambiar).
+- **Los gastos con Nu salen únicamente de los estados de cuenta**, ubicados por su fecha de operación: así nunca se
+  cuentan dos veces.
+- **Reglas de conteo:** los pagos a la tarjeta **no** son gasto (la compra ya se contó; se muestran como dato);
+  intereses, comisiones e IVA **sí** (dinero perdido); las mensualidades a meses **no** se vuelven a sumar.
+- Si parte del mes aún no está en un estado de cuenta cargado, la app dice exactamente qué días faltan.
+
+**Índice de salud financiera** (mismas reglas que el crediticio: ponderado, solo con indicadores con datos, ≥40 de peso):
+
+| Indicador | Cálculo | 🟢 / 🟡 / 🔴 | Peso |
+|---|---|---|---|
+| Tasa de ahorro | (ingresos − gastos) / ingresos | ≥20% / 10–20% / <10% | 25 |
+| Gasto esencial | salud + educación + hogar + súper + transporte + servicios / ingresos | ≤50% / 50–70% / >70% | 15 |
+| Saldo de tarjeta vs. ingreso | saldo Nu del último estado de cuenta / ingreso del mes | <30% / 30–60% / >60% | 15 |
+| Costo del crédito vs. ingreso | intereses + comisiones + IVA / ingreso | 0 / <5% / ≥5% | 5 |
+| Salud crediticia (Nu) | índice crediticio de la tarjeta (0–100, proporcional) | ≥80 / ≥60 / <60 | 40 |
+
+Sin ingresos registrados, los cuatro primeros quedan "sin datos" y la app pide registrar el ingreso del mes.
 
 ### Salud crediticia
 
@@ -168,6 +202,7 @@ flowchart LR
 │   │   ├── auth.py        # AuthService: registro, login, sesiones, límite de intentos
 │   │   ├── categorizer.py # Categorías de gasto: correcciones → reglas → Haiku → sin clasificar
 │   │   ├── credit_health.py # Indicadores, índice 0-100 y recomendaciones (en código)
+│   │   ├── finance.py     # Mes calendario: ingresos + efectivo + Nu; índice de salud financiera
 │   │   └── assistant.py   # Fachada para API / GUI / CLI + cuotas de uso
 │   ├── pipeline/          # LangGraph
 │   │   ├── state.py       # IngestionState, QAState
@@ -181,8 +216,9 @@ flowchart LR
 │       ├── helpers.js     # Formato de fechas, moneda, escape de HTML
 │       ├── app.js         # Estado, llamadas a la API y renderizado
 │       ├── health.js      # Pestaña Salud crediticia: índice, semáforos y gráficas SVG
+│       ├── finance.js     # Pestaña Mi mes: registro rápido, panorama y movimientos del mes
 │       └── auth.js        # Entrar / crear cuenta / salir / cambiar contraseña; arranque
-├── migrations/            # Alembic: 0001 esquema base, 0002 multiusuario, 0003 categorías
+├── migrations/            # Alembic: 0001 base, 0002 multiusuario, 0003 categorías, 0004 ingresos y efectivo
 ├── alembic.ini
 ├── tests/                 # pytest: dobles en fakes.py; test_db.py usa PostgreSQL real
 ├── .github/workflows/ci-cd.yml   # Tests en cada push; deploy a Render desde main
@@ -212,6 +248,9 @@ Todas las rutas de datos requieren sesión (si no, **401**) y operan solo sobre 
 | `DELETE` | `/statements/{id}` | Elimina un estado de cuenta |
 | `GET` | `/credit-health?statement_id=` | Índice, indicadores, recomendaciones, categorías y series mensuales |
 | `GET` | `/categories` | Catálogo de categorías de gasto |
+| `GET` | `/finance/month?month=AAAA-MM` | Panorama del mes: ingresos, efectivo, Nu, índice, categorías y movimientos |
+| `POST` · `PATCH` · `DELETE` | `/incomes`, `/incomes/{id}` | Ingresos (únicos o recurrentes; `end_date` deja de repetirlo) |
+| `POST` · `PATCH` · `DELETE` | `/cash-expenses`, `/cash-expenses/{id}` | Gastos en efectivo |
 | `PATCH` | `/transactions/{id}/category` | Corrige la categoría (y la de todos los cargos de ese comercio) |
 | `POST` | `/ask` | Pregunta (grafo RAG + salud crediticia); **429** si se excede la cuota |
 | `GET` | `/metrics` · `/metrics/recent` | Métricas propias; `?scope=all` (solo admin) de todas las cuentas |
@@ -257,6 +296,7 @@ Ejecuta los comandos desde la carpeta raíz del proyecto (donde está este READM
 | `SESSION_TTL_HOURS` | `168` | Duración de la sesión (se renueva con el uso) |
 | `MAX_USERS` · `MAX_STATEMENTS_PER_USER` | `50` · `24` | `0` = sin límite |
 | `MAX_ASKS_PER_DAY` · `MAX_UPLOADS_PER_DAY` | `30` · `10` | Por cuenta, día UTC. `0` = sin límite |
+| `MAX_MANUAL_ENTRIES_PER_DAY` | `200` | Ingresos + gastos en efectivo registrados en 24 h |
 | `LOGIN_MAX_ATTEMPTS` · `LOGIN_WINDOW_MINUTES` | `5` · `15` | Intentos fallidos antes de bloquear |
 | `LOCAL_USER` | `local` | Usuario con el que operan la GUI y la CLI |
 | `CATEGORIZER_LLM` · `CATEGORIZER_MODEL` | `true` · `claude-haiku-5-5` | Clasificación con LLM (requiere `ANTHROPIC_API_KEY`) |
@@ -382,6 +422,9 @@ pytest
 `tests/test_categorizer.py` cubre reglas, la cascada (correcciones → reglas → LLM), confianza baja y fallas del LLM.
 `tests/test_credit_health.py` cubre cada indicador, el índice y los casos de un mes, pago mínimo, pago tardío y meses
 no consecutivos.
+`tests/test_finance.py` cubre ingresos recurrentes, huecos de cobertura de Nu, las reglas de conteo (pagos y
+mensualidades no son gasto), el índice y las validaciones; `tests/test_frontend.py` revisa que los scripts del
+frontend no choquen entre sí.
 `tests/test_api.py` levanta la API con dos cuentas y verifica aislamiento (404 cruzados), cuotas (429), CSRF y sesiones.
 `tests/test_db.py` corre las migraciones y los filtros por usuario contra PostgreSQL real:
 
@@ -399,4 +442,7 @@ RUN_DB_TESTS=1 DB_SCHEMA=<esquema vacío> pytest tests/test_db.py   # se niega a
 - Sin recuperación de contraseña por correo ni borrado de cuenta en la interfaz (los hace el admin desde la terminal).
 - Los nombres de comercio en el PDF a veces vienen abreviados ("Vsfa Galerias Metepec"): esos quedan sin clasificar
   hasta que el usuario los corrige.
-- La GUI de escritorio (Tkinter) todavía no muestra la salud crediticia ni las categorías; están en la web y en el chat.
+- La GUI de escritorio (Tkinter) todavía no muestra la salud crediticia, las categorías ni "Mi mes"; están en la web
+  y en el chat.
+- A mano solo se registran efectivo e ingresos: las compras con Nu del mes en curso aparecen hasta cargar el estado de
+  cuenta que las incluye.

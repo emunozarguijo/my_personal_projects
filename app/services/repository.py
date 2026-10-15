@@ -6,10 +6,10 @@ argumento y lo usa en el WHERE. Un registro de otro usuario se trata igual que u
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
@@ -17,7 +17,9 @@ from app.core.database import Database
 from app.core.exceptions import AuthError
 from app.core.models import (
     ApiMetric,
+    CashExpense,
     DocumentChunk,
+    Income,
     InstallmentRow,
     MerchantCategory,
     Statement,
@@ -27,7 +29,9 @@ from app.core.models import (
 )
 from app.schemas import (
     ApiCallRecord,
+    CashExpenseItem,
     Chunk,
+    IncomeItem,
     Installment,
     OperationStats,
     ParsedStatement,
@@ -400,3 +404,83 @@ class UserRepository:
             stmt = stmt.where(UserSession.token_hash != except_token_hash)
         with self.db.session() as s:
             s.execute(stmt)
+
+
+class FinanceRepository:
+    """Ingresos y gastos en efectivo registrados a mano. Siempre filtrado por usuario."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    # ------------------------------------------------------------- ingresos
+    def add_income(self, user_id: int, **fields) -> IncomeItem:
+        with self.db.session() as s:
+            row = Income(user_id=user_id, **fields)
+            s.add(row)
+            s.flush()
+            return IncomeItem.model_validate(row, from_attributes=True)
+
+    def update_income(self, user_id: int, income_id: int, **fields) -> IncomeItem | None:
+        with self.db.session() as s:
+            row = s.scalar(select(Income).where(Income.id == income_id, Income.user_id == user_id))
+            if row is None:
+                return None
+            for k, v in fields.items():
+                setattr(row, k, v)
+            s.flush()
+            return IncomeItem.model_validate(row, from_attributes=True)
+
+    def delete_income(self, user_id: int, income_id: int) -> bool:
+        with self.db.session() as s:
+            return s.execute(delete(Income).where(Income.id == income_id, Income.user_id == user_id)).rowcount > 0
+
+    def incomes_for_range(self, user_id: int, start: date, end: date) -> list[IncomeItem]:
+        """Ingresos únicos dentro del rango + recurrentes activos en algún día del rango."""
+        once = and_(Income.recurring.is_(False), Income.date >= start, Income.date <= end)
+        repeating = and_(Income.recurring.is_(True), Income.date <= end,
+                         or_(Income.end_date.is_(None), Income.end_date >= start))  # fmt: skip
+        with self.db.session() as s:
+            rows = s.scalars(
+                select(Income).where(Income.user_id == user_id, or_(once, repeating)).order_by(Income.date, Income.id)
+            ).all()
+            return [IncomeItem.model_validate(r, from_attributes=True) for r in rows]
+
+    # ------------------------------------------------------------- gastos en efectivo
+    def add_cash_expense(self, user_id: int, **fields) -> CashExpenseItem:
+        with self.db.session() as s:
+            row = CashExpense(user_id=user_id, **fields)
+            s.add(row)
+            s.flush()
+            return CashExpenseItem.model_validate(row, from_attributes=True)
+
+    def update_cash_expense(self, user_id: int, expense_id: int, **fields) -> CashExpenseItem | None:
+        with self.db.session() as s:
+            row = s.scalar(select(CashExpense).where(CashExpense.id == expense_id, CashExpense.user_id == user_id))
+            if row is None:
+                return None
+            for k, v in fields.items():
+                setattr(row, k, v)
+            s.flush()
+            return CashExpenseItem.model_validate(row, from_attributes=True)
+
+    def delete_cash_expense(self, user_id: int, expense_id: int) -> bool:
+        with self.db.session() as s:
+            stmt = delete(CashExpense).where(CashExpense.id == expense_id, CashExpense.user_id == user_id)
+            return s.execute(stmt).rowcount > 0
+
+    def cash_for_range(self, user_id: int, start: date, end: date) -> list[CashExpenseItem]:
+        with self.db.session() as s:
+            rows = s.scalars(
+                select(CashExpense)
+                .where(CashExpense.user_id == user_id, CashExpense.date >= start, CashExpense.date <= end)
+                .order_by(CashExpense.date, CashExpense.id)
+            ).all()
+            return [CashExpenseItem.model_validate(r, from_attributes=True) for r in rows]
+
+    def count_created_since(self, user_id: int, since: datetime) -> int:
+        with self.db.session() as s:
+            n_inc = s.scalar(select(func.count()).select_from(Income)
+                             .where(Income.user_id == user_id, Income.created_at >= since)) or 0  # fmt: skip
+            n_cash = s.scalar(select(func.count()).select_from(CashExpense)
+                              .where(CashExpense.user_id == user_id, CashExpense.created_at >= since)) or 0  # fmt: skip
+            return n_inc + n_cash
