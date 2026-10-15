@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
 from app.core.database import Database
@@ -18,6 +19,7 @@ from app.core.models import (
     ApiMetric,
     DocumentChunk,
     InstallmentRow,
+    MerchantCategory,
     Statement,
     TransactionRow,
     User,
@@ -35,6 +37,7 @@ from app.schemas import (
     Transaction,
     UserAccount,
 )
+from app.services.categorizer import normalize_merchant
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +77,9 @@ class StatementRepository:
                 **{f: getattr(parsed, f) for f in _STATEMENT_FIELDS},
             )
             row.transactions = [
-                TransactionRow(position=i, **t.model_dump(mode="python") | {"kind": t.kind.value})
+                TransactionRow(
+                    position=i, **t.model_dump(mode="python", exclude={"id", "deductible"}) | {"kind": t.kind.value}
+                )
                 for i, t in enumerate(parsed.transactions)
             ]
             row.installments = [InstallmentRow(**i.model_dump()) for i in parsed.installments]
@@ -105,21 +110,94 @@ class StatementRepository:
                 for r in rows
             ]
 
+    @staticmethod
+    def _detail(row: Statement) -> StatementDetail:
+        extra = row.extra or {}
+        return StatementDetail(
+            id=row.id,
+            filename=row.filename,
+            **{f: getattr(row, f) for f in _STATEMENT_FIELDS},
+            payment_scenarios=extra.get("payment_scenarios", []),
+            warnings=extra.get("warnings", []),
+            transactions=[Transaction.model_validate(t, from_attributes=True) for t in row.transactions],
+            installments=[Installment.model_validate(i, from_attributes=True) for i in row.installments],
+        )
+
     def get_statement_detail(self, user_id: int, statement_id: int) -> StatementDetail | None:
         with self.db.session() as s:
             row = s.scalar(select(Statement).where(Statement.id == statement_id, Statement.user_id == user_id))
-            if row is None:
-                return None
-            extra = row.extra or {}
-            return StatementDetail(
-                id=row.id,
-                filename=row.filename,
-                **{f: getattr(row, f) for f in _STATEMENT_FIELDS},
-                payment_scenarios=extra.get("payment_scenarios", []),
-                warnings=extra.get("warnings", []),
-                transactions=[Transaction.model_validate(t, from_attributes=True) for t in row.transactions],
-                installments=[Installment.model_validate(i, from_attributes=True) for i in row.installments],
+            return self._detail(row) if row else None
+
+    def list_statement_details(self, user_id: int) -> list[StatementDetail]:
+        """Todos los estados de cuenta del usuario, del más antiguo al más reciente (para tendencias)."""
+        with self.db.session() as s:
+            rows = s.scalars(
+                select(Statement).where(Statement.user_id == user_id).order_by(Statement.period_end)
+            ).all()
+            return [self._detail(r) for r in rows]
+
+    def list_user_ids_with_statements(self) -> list[int]:
+        with self.db.session() as s:
+            return list(s.scalars(select(Statement.user_id).distinct()).all())
+
+    # ------------------------------------------------------------- categorías
+    def get_merchant_categories(self, user_id: int, merchant_keys: list[str]) -> dict[str, str]:
+        if not merchant_keys:
+            return {}
+        with self.db.session() as s:
+            rows = s.execute(
+                select(MerchantCategory.merchant_key, MerchantCategory.category).where(
+                    MerchantCategory.user_id == user_id, MerchantCategory.merchant_key.in_(merchant_keys)
+                )
+            ).all()
+            return dict(rows)
+
+    def set_transaction_category(self, user_id: int, transaction_id: int, category: str) -> int:
+        """Corrige un cargo y recuerda la categoría para ese comercio: se aplica a todos los cargos del usuario
+        con el mismo comercio (y a los futuros). Devuelve cuántos movimientos cambió; 0 si no es suyo."""
+        with self.db.session() as s:
+            tx = s.scalar(
+                select(TransactionRow)
+                .join(Statement, Statement.id == TransactionRow.statement_id)
+                .where(TransactionRow.id == transaction_id, Statement.user_id == user_id)
             )
+            if tx is None:
+                return 0
+            key = normalize_merchant(tx.description)
+            s.execute(
+                pg_insert(MerchantCategory)
+                .values(user_id=user_id, merchant_key=key, category=category)
+                .on_conflict_do_update(
+                    constraint="uq_merchant_categories_user_merchant",
+                    set_={"category": category, "updated_at": func.now()},
+                )
+            )
+            same = s.scalars(
+                select(TransactionRow)
+                .join(Statement, Statement.id == TransactionRow.statement_id)
+                .where(Statement.user_id == user_id, TransactionRow.kind == "purchase")
+            ).all()
+            changed = 0
+            for row in same:
+                if normalize_merchant(row.description) == key:
+                    row.category, row.category_source = category, "user"
+                    changed += 1
+            return changed
+
+    def update_categories(self, user_id: int, categories: dict[int, tuple[str, str]]) -> None:
+        """{transaction_id: (categoría, origen)}; ignora ids que no sean del usuario."""
+        if not categories:
+            return
+        with self.db.session() as s:
+            own = set(s.scalars(
+                select(TransactionRow.id)
+                .join(Statement, Statement.id == TransactionRow.statement_id)
+                .where(Statement.user_id == user_id, TransactionRow.id.in_(list(categories)))
+            ).all())  # fmt: skip
+            for tx_id in own:
+                cat, source = categories[tx_id]
+                s.execute(update(TransactionRow).where(TransactionRow.id == tx_id)
+                          .values(category=cat, category_source=source))  # fmt: skip
 
     def latest_statement_id(self, user_id: int) -> int | None:
         with self.db.session() as s:

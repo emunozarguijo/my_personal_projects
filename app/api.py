@@ -30,6 +30,7 @@ from app.core.exceptions import AuthError, QuotaExceededError, RateLimitedError
 from app.schemas import (
     ApiCallRecord,
     AskResult,
+    CreditHealthReport,
     IngestResult,
     OperationStats,
     StatementDetail,
@@ -38,6 +39,7 @@ from app.schemas import (
     UserPublic,
 )
 from app.services.assistant import NOT_FOUND, StatementAssistant
+from app.services.categorizer import CATEGORIES, DEDUCTIBLE, ESSENTIAL, UNCLASSIFIED
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 SESSION_COOKIE = "session"
@@ -220,6 +222,39 @@ def delete_statement(statement_id: int, user: UserAccount = Depends(current_user
                      assistant: StatementAssistant = Depends(get_assistant)) -> None:  # fmt: skip
     if not assistant.delete_statement(user.id, statement_id):
         raise HTTPException(status_code=404, detail=NOT_FOUND)
+
+
+# ------------------------------------------------------------------ salud crediticia y categorías
+@router.get("/credit-health", response_model=CreditHealthReport)
+def credit_health(statement_id: int | None = None, user: UserAccount = Depends(current_user),
+                  assistant: StatementAssistant = Depends(get_assistant)):  # fmt: skip
+    if statement_id is not None and not assistant.owns(user.id, statement_id):
+        raise HTTPException(status_code=404, detail=NOT_FOUND)
+    return assistant.credit_health(user.id, statement_id)
+
+
+@router.get("/categories")
+def categories() -> list[dict]:
+    return [
+        {"key": k, "label": v, "essential": k in ESSENTIAL, "deductible": k in DEDUCTIBLE}
+        for k, v in CATEGORIES.items() if k != UNCLASSIFIED
+    ]  # fmt: skip
+
+
+class CategoryUpdate(BaseModel):
+    category: str = Field(min_length=1, max_length=30)
+
+
+@router.patch("/transactions/{transaction_id}/category")
+def set_category(transaction_id: int, body: CategoryUpdate, user: UserAccount = Depends(current_user),
+                 assistant: StatementAssistant = Depends(get_assistant)) -> dict:  # fmt: skip
+    try:
+        changed = assistant.set_category(user.id, transaction_id, body.category)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not changed:
+        raise HTTPException(status_code=404, detail="Ese movimiento no existe.")
+    return {"updated": changed, "category": body.category}
 
 
 # ------------------------------------------------------------------ preguntas y métricas

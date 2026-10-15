@@ -122,8 +122,25 @@ class TransactionRow(Base):
     kind: Mapped[str] = mapped_column(String(20), index=True)
     detail: Mapped[str | None] = mapped_column(Text)
     currency: Mapped[str] = mapped_column(String(3), default="MXN")
+    category: Mapped[str | None] = mapped_column(String(30))
+    category_source: Mapped[str | None] = mapped_column(String(10))
 
     statement: Mapped[Statement] = relationship(back_populates="transactions")
+
+
+class MerchantCategory(Base):
+    """Corrección de categoría que hizo un usuario para un comercio; se aplica a sus cargos futuros."""
+
+    __tablename__ = "merchant_categories"
+    __table_args__ = (UniqueConstraint("user_id", "merchant_key", name="uq_merchant_categories_user_merchant"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    merchant_key: Mapped[str] = mapped_column(String(120))
+    category: Mapped[str] = mapped_column(String(30))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class InstallmentRow(Base):

@@ -15,11 +15,14 @@ from app.core.logging import log_event, request_context
 from app.schemas import (
     ApiCallRecord,
     AskResult,
+    CreditHealthReport,
     IngestResult,
     OperationStats,
     StatementDetail,
     StatementSummary,
 )
+from app.services.categorizer import CATEGORIES, UNCLASSIFIED
+from app.services.credit_health import build_report
 from app.services.metrics import MetricsService, Stopwatch
 
 logger = logging.getLogger(__name__)
@@ -145,6 +148,15 @@ class StatementAssistant:
         chunks = self.statements.get_chunks_by_kind(user_id, statement_id, "summary")
         return chunks[0].content if chunks else "Sin información."
 
+    def credit_health(self, user_id: int, statement_id: int | None = None) -> CreditHealthReport:
+        return build_report(self.statements.list_statement_details(user_id), statement_id)
+
+    def set_category(self, user_id: int, transaction_id: int, category: str) -> int:
+        """Corrige la categoría de un cargo (y de los demás del mismo comercio). 0 = no existe o no es suyo."""
+        if category not in CATEGORIES or category == UNCLASSIFIED:
+            raise ValueError(f"Categoría inválida: {category!r}")
+        return self.statements.set_transaction_category(user_id, transaction_id, category)
+
     def metrics_summary(self, user_id: int | None) -> list[OperationStats]:
         """`user_id=None` → todas las cuentas (solo para admin; lo decide quien llama)."""
         return self.metrics_repo.summary(user_id)
@@ -177,6 +189,12 @@ class UserAssistant:
 
     def overview(self, statement_id: int) -> str:
         return self._a.overview(self.user_id, statement_id)
+
+    def credit_health(self, statement_id: int | None = None) -> CreditHealthReport:
+        return self._a.credit_health(self.user_id, statement_id)
+
+    def set_category(self, transaction_id: int, category: str) -> int:
+        return self._a.set_category(self.user_id, transaction_id, category)
 
     def metrics_summary(self) -> list[OperationStats]:
         return self._a.metrics_summary(self.user_id)

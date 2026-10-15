@@ -20,6 +20,7 @@ from app.schemas import (
     TokenUsage,
     UserAccount,
 )
+from app.services.categorizer import normalize_merchant
 from app.services.llm import LLMProvider
 
 FIXTURE = Path(__file__).parent / "fixtures" / "nu_statement_sample.txt"
@@ -36,7 +37,9 @@ class InMemoryRepo:
     def __init__(self):
         self.statements: dict[int, SimpleNamespace] = {}
         self.chunks: list[tuple[int, int, Chunk, list[float]]] = []  # (user_id, statement_id, chunk, vector)
+        self.overrides: dict[tuple[int, str], str] = {}
         self._next_id = 1
+        self._next_tx = 1
 
     def _own(self, user_id, sid):
         st = self.statements.get(sid)
@@ -47,8 +50,52 @@ class InMemoryRepo:
 
     def save_statement(self, user_id, parsed: ParsedStatement, file_hash, filename):
         sid, self._next_id = self._next_id, self._next_id + 1
+        txs = []
+        for t in parsed.transactions:
+            txs.append(t.model_copy(update={"id": self._next_tx}))
+            self._next_tx += 1
+        parsed = parsed.model_copy(update={"transactions": txs})
         self.statements[sid] = SimpleNamespace(user_id=user_id, parsed=parsed, hash=file_hash, filename=filename)
         return sid
+
+    def list_statement_details(self, user_id):
+        own = [(sid, st) for sid, st in self.statements.items() if st.user_id == user_id]
+        own.sort(key=lambda x: x[1].parsed.period_end)
+        return [StatementDetail(id=sid, filename=st.filename, **st.parsed.model_dump()) for sid, st in own]
+
+    def list_user_ids_with_statements(self):
+        return sorted({st.user_id for st in self.statements.values()})
+
+    def get_merchant_categories(self, user_id, merchant_keys):
+        return {k: self.overrides[(user_id, k)] for k in merchant_keys if (user_id, k) in self.overrides}
+
+    def _set(self, user_id, pred, category, source):
+        changed = 0
+        for st in self.statements.values():
+            if st.user_id != user_id:
+                continue
+            txs = []
+            for t in st.parsed.transactions:
+                if pred(t):
+                    t = t.model_copy(update={"category": category, "category_source": source})
+                    changed += 1
+                txs.append(t)
+            st.parsed = st.parsed.model_copy(update={"transactions": txs})
+        return changed
+
+    def set_transaction_category(self, user_id, transaction_id, category):
+        tx = next((t for st in self.statements.values() if st.user_id == user_id
+                   for t in st.parsed.transactions if t.id == transaction_id), None)  # fmt: skip
+        if tx is None:
+            return 0
+        key = normalize_merchant(tx.description)
+        self.overrides[(user_id, key)] = category
+        return self._set(user_id, lambda t: t.kind.value == "purchase" and normalize_merchant(t.description) == key,
+                         category, "user")  # fmt: skip
+
+    def update_categories(self, user_id, categories):
+        for tx_id, (cat, source) in categories.items():
+            self._set(user_id, lambda t, i=tx_id: t.id == i, cat, source)
 
     def count_statements(self, user_id):
         return sum(st.user_id == user_id for st in self.statements.values())

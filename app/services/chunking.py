@@ -9,6 +9,7 @@ from collections import defaultdict
 from decimal import Decimal
 
 from app.schemas import Chunk, ParsedStatement, Transaction, TransactionKind
+from app.services.categorizer import summarize_categories
 
 KIND_LABEL = {
     TransactionKind.PURCHASE: "compra",
@@ -153,6 +154,12 @@ class StatementChunker:
         lines.append("- Compras por comercio (mayor a menor):")
         for name, total in sorted(by_merchant.items(), key=lambda kv: kv[1], reverse=True):
             lines.append(f"    · {name}: {money(total)}")
+        categories = summarize_categories(s.transactions)
+        if any(c.category != "sin_clasificar" for c in categories):
+            lines.append("- Compras por categoría de gasto (mayor a menor):")
+            for c in categories:
+                flag = " (posible deducible: requiere CFDI)" if c.deductible else ""
+                lines.append(f"    · {c.label}: {money(c.amount)} ({c.share:.0f}%, {c.count} compras){flag}")
         lines.append("- Compras por día de operación:")
         for day, total in sorted(by_day.items()):
             lines.append(f"    · {dmy(day)}: {money(total)}")

@@ -8,10 +8,13 @@ import logging
 from pathlib import Path
 from typing import Callable
 
+from app.schemas import RetrievedChunk
+
 from app.core.exceptions import AppError, PdfExtractionError
 from app.core.logging import log_event
 from app.core.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.pipeline.state import IngestionState, QAState
+from app.services.categorizer import TransactionCategorizer
 from app.services.chunking import StatementChunker
 from app.services.embeddings import EmbeddingService
 from app.services.llm import LLMService
@@ -53,12 +56,14 @@ def traced(name: str):
 
 
 class IngestionNodes:
-    def __init__(self, extractor, repo, embeddings: EmbeddingService, chunker: StatementChunker, max_mb: int = 20):
+    def __init__(self, extractor, repo, embeddings: EmbeddingService, chunker: StatementChunker, max_mb: int = 20,
+                 categorizer: TransactionCategorizer | None = None):  # fmt: skip
         self.extractor = extractor
         self.repo = repo
         self.embeddings = embeddings
         self.chunker = chunker
         self.max_bytes = max_mb * 1024 * 1024
+        self.categorizer = categorizer
 
     @traced("validate_file")
     def validate_file(self, state: IngestionState):
@@ -90,6 +95,14 @@ class IngestionNodes:
         existing = self.repo.find_by_hash(state["user_id"], state["file_hash"])
         return {"duplicate": True, "statement_id": existing} if existing else {"duplicate": False}
 
+    @traced("categorize")
+    def categorize(self, state: IngestionState):
+        if not self.categorizer:
+            return {}
+        parsed = state["parsed"]
+        txs = self.categorizer.categorize(state["user_id"], parsed.transactions)
+        return {"parsed": parsed.model_copy(update={"transactions": txs})}
+
     @traced("persist_statement")
     def persist_statement(self, state: IngestionState):
         sid = self.repo.save_statement(state["user_id"], state["parsed"], state["file_hash"], state["filename"])
@@ -108,14 +121,22 @@ class IngestionNodes:
 
 
 class QANodes:
-    def __init__(self, retriever: Retriever, llm: LLMService, max_history_turns: int = 6):
+    def __init__(self, retriever: Retriever, llm: LLMService, max_history_turns: int = 6,
+                 insights: Callable[[int, int | None], str] | None = None):  # fmt: skip
         self.retriever = retriever
         self.llm = llm
         self.max_history = max_history_turns * 2
+        self.insights = insights  # texto de salud crediticia calculado al momento (no se indexa)
 
     @traced("retrieve")
     def retrieve(self, state: QAState):
-        return {"chunks": self.retriever.retrieve(state["user_id"], state["question"], state.get("statement_id"))}
+        chunks = self.retriever.retrieve(state["user_id"], state["question"], state.get("statement_id"))
+        if self.insights:
+            text = self.insights(state["user_id"], state.get("statement_id"))
+            health = RetrievedChunk(statement_id=state.get("statement_id") or 0, kind="credit_health",
+                                    position=0, content=text, score=1.0)  # fmt: skip
+            chunks = chunks[:1] + [health] + chunks[1:]  # después del resumen del periodo
+        return {"chunks": chunks}
 
     @traced("build_prompt")
     def build_prompt(self, state: QAState):

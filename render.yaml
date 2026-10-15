@@ -10,8 +10,9 @@ services:
     branch: main
     autoDeploy: false           # el deploy lo dispara GitHub Actions solo si pasan los tests
     buildCommand: pip install -r requirements.txt
-    # Aplica migraciones pendientes y arranca. --proxy-headers: la IP real del cliente (límite de intentos de login).
-    startCommand: python -m app.migrate && uvicorn app.api:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips '*'
+    # Migraciones pendientes → clasifica compras sin categoría (idempotente) → arranca.
+    # --proxy-headers: la IP real del cliente (límite de intentos de login).
+    startCommand: python -m app.migrate && python -m app.categorize_backfill && uvicorn app.api:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips '*'
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
@@ -44,6 +45,14 @@ services:
         sync: false
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-5-5
+      # Precios (USD por millón de tokens) para que la pestaña Métricas muestre el costo real del chat.
+      - key: PRICE_INPUT_PER_MTOK
+        value: "2"
+      - key: PRICE_OUTPUT_PER_MTOK
+        value: "10"
+      # Clasificación de gastos: reglas + Claude Haiku para los comercios que las reglas no reconocen.
+      - key: CATEGORIZER_MODEL
+        value: claude-haiku-5-5
 
       # --- Embeddings ---
       # El modelo local (PyTorch + MiniLM) no cabe en los 512 MB del plan free:

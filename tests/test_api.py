@@ -12,6 +12,7 @@ from app.pipeline.graph import build_ingestion_graph, build_qa_graph
 from app.pipeline.nodes import IngestionNodes, QANodes
 from app.services.assistant import StatementAssistant, UsageLimits
 from app.services.auth import AuthService, LoginThrottle
+from app.services.categorizer import TransactionCategorizer
 from app.services.chunking import StatementChunker
 from app.services.embeddings import EmbeddingService, FakeEmbeddingProvider
 from app.services.llm import LLMService
@@ -31,7 +32,8 @@ def services():
     embeddings = EmbeddingService(FakeEmbeddingProvider(64), metrics)
     llm = LLMService(FakeLLMProvider(), metrics)
     assistant = StatementAssistant(
-        build_ingestion_graph(IngestionNodes(FakeExtractor(), repo, embeddings, StatementChunker(10))),
+        build_ingestion_graph(IngestionNodes(FakeExtractor(), repo, embeddings, StatementChunker(10),
+                                             categorizer=TransactionCategorizer(repo))),
         build_qa_graph(QANodes(Retriever(repo, embeddings, metrics, top_k=3), llm)),
         repo, sink, metrics,
         limits=UsageLimits(max_asks_per_day=2, max_uploads_per_day=5, max_statements_per_user=3),
@@ -189,3 +191,42 @@ def test_change_password_keeps_current_session_only(app, ana):
         assert r.status_code == 204
         assert ana.get("/auth/me").status_code == 200
         assert other_device.get("/auth/me").status_code == 401
+
+
+# ------------------------------------------------------------------ salud crediticia y categorías
+def test_credit_health_is_per_user(app, ana, beto):
+    sid = _upload(ana)
+    with TestClient(app) as anon:
+        assert anon.get("/credit-health").status_code == 401
+    r = ana.get("/credit-health").json()
+    assert r["statement_id"] == sid and r["score"] == 53 and r["level"] == "En riesgo"
+    assert {i["key"] for i in r["indicators"]} >= {"utilization", "payment_behavior", "debt_trend"}
+    assert beto.get(f"/credit-health?statement_id={sid}").status_code == 404
+    empty = beto.get("/credit-health").json()
+    assert empty["statement_id"] is None and empty["score"] is None
+
+
+def test_category_correction_applies_to_merchant_and_is_isolated(ana, beto):
+    sid = _upload(ana)
+    _upload(beto)
+    txs = ana.get(f"/statements/{sid}").json()["transactions"]
+    sears = [t for t in txs if t["description"].startswith("Sears Metepec")]
+    assert len(sears) == 2 and all(t["category"] == "hogar" for t in sears)
+
+    assert beto.patch(f"/transactions/{sears[0]['id']}/category", json={"category": "salud"}).status_code == 404
+    assert ana.patch(f"/transactions/{sears[0]['id']}/category", json={"category": "casino"}).status_code == 422
+    r = ana.patch(f"/transactions/{sears[0]['id']}/category", json={"category": "ropa_cuidado"})
+    assert r.status_code == 200 and r.json()["updated"] == 2   # ambos cargos de Sears Metepec
+
+    after = ana.get(f"/statements/{sid}").json()["transactions"]
+    assert {t["category_source"] for t in after if t["description"].startswith("Sears Metepec")} == {"user"}
+    beto_sid = beto.get("/statements").json()[0]["id"]
+    beto_sears = [t for t in beto.get(f"/statements/{beto_sid}").json()["transactions"] if t["description"] == "Sears Metepec"]
+    assert all(t["category"] == "hogar" for t in beto_sears)    # la corrección de Ana no afecta a Beto
+
+
+def test_categories_catalog(ana):
+    cats = ana.get("/categories").json()
+    keys = [c["key"] for c in cats]
+    assert "salud" in keys and "sin_clasificar" not in keys
+    assert next(c for c in cats if c["key"] == "educacion")["deductible"] is True

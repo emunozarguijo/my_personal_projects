@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     admin_password: SecretStr | None = None
     expose_docs: bool | None = None         # None → /docs solo fuera de prod
 
+    # Clasificación de gastos (reglas + LLM barato para los comercios que las reglas no reconocen)
+    categorizer_llm: bool = True
+    categorizer_model: str = "claude-haiku-5-5"
+    categorizer_min_confidence: float = 0.6
+    categorizer_price_input_per_mtok: float = 0.10
+    categorizer_price_output_per_mtok: float = 0.50
+
     # Límites de uso (0 = sin límite)
     max_users: int = 50
     max_statements_per_user: int = 24

@@ -4,7 +4,9 @@ import pytest
 
 from app.pipeline.graph import build_ingestion_graph, build_qa_graph
 from app.pipeline.nodes import IngestionNodes, QANodes
+from app.services.categorizer import TransactionCategorizer
 from app.services.chunking import StatementChunker
+from app.services.credit_health import build_report, report_to_text
 from app.services.embeddings import EmbeddingService, FakeEmbeddingProvider
 from app.services.llm import LLMService
 from app.services.metrics import MetricsService
@@ -23,8 +25,10 @@ def env(tmp_path):
     embeddings = EmbeddingService(FakeEmbeddingProvider(64), metrics)
     llm_provider = FakeLLMProvider()
     llm = LLMService(llm_provider, metrics)
-    ingest = build_ingestion_graph(IngestionNodes(FakeExtractor(), repo, embeddings, StatementChunker(10)))
-    qa = build_qa_graph(QANodes(Retriever(repo, embeddings, metrics, top_k=3), llm))
+    ingest = build_ingestion_graph(IngestionNodes(FakeExtractor(), repo, embeddings, StatementChunker(10),
+                                                  categorizer=TransactionCategorizer(repo)))
+    insights = lambda uid, sid: report_to_text(build_report(repo.list_statement_details(uid), sid))  # noqa: E731
+    qa = build_qa_graph(QANodes(Retriever(repo, embeddings, metrics, top_k=3), llm, insights=insights))
     return SimpleNamespace(pdf=pdf, sink=sink, repo=repo, ingest=ingest, qa=qa, llm=llm_provider)
 
 
@@ -42,7 +46,7 @@ def test_ingestion_persists_and_indexes(env):
     state = _ingest(env)
     assert not state.get("error")
     assert state["statement_id"] == 1 and state["n_chunks"] == len(env.repo.chunks) > 4
-    assert set(state["timings"]) >= {"validate_file", "parse_statement", "embed_and_store"}
+    assert set(state["timings"]) >= {"validate_file", "parse_statement", "categorize", "embed_and_store"}
     assert {r["operation"] for r in env.sink.rows} == {"embedding"}
     assert {uid for uid, *_ in env.repo.chunks} == {ANA}
 
@@ -96,3 +100,27 @@ def test_llm_failure_is_reported_not_raised(env):
     state = _ask(env, "hola", 1)
     assert "LLM" in state["error"]
     assert any(r["status"] == "error" for r in env.sink.rows if r["operation"] == "chat")
+
+
+def test_ingestion_categorizes_purchases(env):
+    _ingest(env)
+    txs = env.repo.list_statement_details(ANA)[0].transactions
+    purchases = [t for t in txs if t.kind.value == "purchase"]
+    assert all(t.category for t in purchases) and all(t.category is None for t in txs if t.kind.value != "purchase")
+    assert {t.category for t in purchases} >= {"hogar", "alimentos", "ropa_cuidado"}
+    analytics = next(c for _, _, c, _ in env.repo.chunks if c.kind == "analytics")
+    assert "Compras por categoría" in analytics.content
+
+
+def test_duplicate_skips_categorization(env):
+    _ingest(env)
+    state = _ingest(env)
+    assert state["duplicate"] and "categorize" not in state["timings"]
+
+
+def test_chat_context_includes_credit_health(env):
+    _ingest(env)
+    state = _ask(env, "¿Cómo está mi salud crediticia?", 1)
+    kinds = [c.kind for c in state["chunks"]]
+    assert kinds[0] == "summary" and kinds[1] == "credit_health"
+    assert "Índice: 53/100" in env.llm.last_messages[-1]["content"]
