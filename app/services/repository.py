@@ -9,9 +9,10 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 
 from app.core.database import Database
 from app.core.exceptions import AuthError
@@ -53,6 +54,10 @@ _STATEMENT_FIELDS = (
 ).split()
 
 
+# Carga movimientos y compras a meses en una consulta cada uno (no dos consultas por estado de cuenta: "N+1").
+_WITH_DETAIL = (selectinload(Statement.transactions), selectinload(Statement.installments))
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -60,6 +65,13 @@ def _utcnow() -> datetime:
 class StatementRepository:
     def __init__(self, db: Database):
         self.db = db
+        self._iterative_scan: bool | None = None  # ¿pgvector >= 0.8? se averigua una vez
+
+    def _supports_iterative_scan(self, s) -> bool:
+        if self._iterative_scan is None:
+            version = s.scalar(text("SELECT extversion FROM pg_extension WHERE extname = 'vector'")) or "0"
+            self._iterative_scan = tuple(int(x) for x in version.split(".")[:2]) >= (0, 8)
+        return self._iterative_scan
 
     # ------------------------------------------------------------- statements
     def find_by_hash(self, user_id: int, file_hash: str) -> int | None:
@@ -82,7 +94,8 @@ class StatementRepository:
             )
             row.transactions = [
                 TransactionRow(
-                    position=i, **t.model_dump(mode="python", exclude={"id", "deductible"}) | {"kind": t.kind.value}
+                    position=i, merchant_key=normalize_merchant(t.description),
+                    **t.model_dump(mode="python", exclude={"id", "deductible"}) | {"kind": t.kind.value},
                 )
                 for i, t in enumerate(parsed.transactions)
             ]
@@ -129,14 +142,16 @@ class StatementRepository:
 
     def get_statement_detail(self, user_id: int, statement_id: int) -> StatementDetail | None:
         with self.db.session() as s:
-            row = s.scalar(select(Statement).where(Statement.id == statement_id, Statement.user_id == user_id))
+            row = s.scalar(
+                select(Statement).options(*_WITH_DETAIL).where(Statement.id == statement_id, Statement.user_id == user_id)
+            )
             return self._detail(row) if row else None
 
     def list_statement_details(self, user_id: int) -> list[StatementDetail]:
         """Todos los estados de cuenta del usuario, del más antiguo al más reciente (para tendencias)."""
         with self.db.session() as s:
             rows = s.scalars(
-                select(Statement).where(Statement.user_id == user_id).order_by(Statement.period_end)
+                select(Statement).options(*_WITH_DETAIL).where(Statement.user_id == user_id).order_by(Statement.period_end)
             ).all()
             return [self._detail(r) for r in rows]
 
@@ -167,7 +182,7 @@ class StatementRepository:
             )
             if tx is None:
                 return 0
-            key = normalize_merchant(tx.description)
+            key = tx.merchant_key or normalize_merchant(tx.description)
             s.execute(
                 pg_insert(MerchantCategory)
                 .values(user_id=user_id, merchant_key=key, category=category)
@@ -176,17 +191,14 @@ class StatementRepository:
                     set_={"category": category, "updated_at": func.now()},
                 )
             )
-            same = s.scalars(
-                select(TransactionRow)
-                .join(Statement, Statement.id == TransactionRow.statement_id)
-                .where(Statement.user_id == user_id, TransactionRow.kind == "purchase")
-            ).all()
-            changed = 0
-            for row in same:
-                if normalize_merchant(row.description) == key:
-                    row.category, row.category_source = category, "user"
-                    changed += 1
-            return changed
+            own_statements = select(Statement.id).where(Statement.user_id == user_id)
+            result = s.execute(
+                update(TransactionRow)
+                .where(TransactionRow.statement_id.in_(own_statements), TransactionRow.kind == "purchase",
+                       TransactionRow.merchant_key == key)
+                .values(category=category, category_source="user")
+            )  # fmt: skip
+            return result.rowcount
 
     def update_categories(self, user_id: int, categories: dict[int, tuple[str, str]]) -> None:
         """{transaction_id: (categoría, origen)}; ignora ids que no sean del usuario."""
@@ -255,6 +267,11 @@ class StatementRepository:
         if statement_id is not None:
             stmt = stmt.where(DocumentChunk.statement_id == statement_id)
         with self.db.session() as s:
+            if self._supports_iterative_scan(s):
+                # El índice HNSW recorre los vectores de TODAS las cuentas y luego filtra por usuario; con muchas
+                # cuentas podría devolver menos de top_k. El escaneo iterativo sigue buscando hasta completar top_k.
+                # SET LOCAL dura solo esta transacción (compatible con el pooler de Neon).
+                s.execute(text("SET LOCAL hnsw.iterative_scan = strict_order"))
             return [self._to_chunk(row, 1.0 - float(dist)) for row, dist in s.execute(stmt).all()]
 
     @staticmethod
@@ -274,6 +291,11 @@ class MetricsRepository:
     def add(self, **fields: Any) -> None:
         with self.db.session() as s:
             s.add(ApiMetric(**fields))
+
+    def add_many(self, rows: list[dict[str, Any]]) -> None:
+        """Varias métricas en una sola transacción (lo usa BackgroundMetricsSink)."""
+        with self.db.session() as s:
+            s.add_all(ApiMetric(**r) for r in rows)
 
     def count_since(self, user_id: int, operation: str, since: datetime) -> int:
         with self.db.session() as s:

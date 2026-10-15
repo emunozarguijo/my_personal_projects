@@ -17,7 +17,8 @@ from app.schemas import (
     TransactionKind,
 )
 from app.services.categorizer import UNCLASSIFIED, summarize_categories
-from app.services.chunking import dmy, money
+from app.core.formatting import dmy, money
+from app.core.formatting import pct as _pct
 
 Z = Decimal(0)
 POINTS = {"good": 1.0, "warn": 0.5, "bad": 0.0}
@@ -27,10 +28,6 @@ DISCLAIMER = "Índice orientativo calculado con tus estados de cuenta; no es tu 
 
 def _d(value: Decimal | None) -> Decimal:
     return value if value is not None else Z
-
-
-def _pct(part: Decimal, whole: Decimal) -> float:
-    return float(part / whole * 100) if whole else 0.0
 
 
 def _payments(s: StatementDetail) -> Decimal:

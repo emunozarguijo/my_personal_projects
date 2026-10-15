@@ -17,28 +17,31 @@ async function loadHealth(){
 
 function scoreStatus(score){return score==null?'na':score>=80?'good':score>=60?'warn':'bad';}
 
-function renderHealth(r){
-  const st=scoreStatus(r.score);
-  let h='<section class="hero-health">'
-    +'<div><div class="hero-label">Índice de salud crediticia</div>'
-    +'<div class="hero-num">'+(r.score==null?'—':r.score)+'<span>/100</span></div>'
-    +'<div class="status-chip '+st+'"><span aria-hidden="true">'+STATUS[st].icon+'</span>'+esc(r.level)+'</div></div>'
-    +'<div class="meter" role="img" aria-label="Índice '+(r.score==null?'sin datos':r.score+' de 100')+'">'
-    +'<div class="meter-fill '+st+'" style="width:'+(r.score||0)+'%"></div></div>'
-    +'<p class="small">'+esc(r.notes[0]||'')+'</p></section>';
-
-  h+='<div class="ind-grid">';
-  for(const i of r.indicators){
-    const s=STATUS[i.status];
-    h+='<article class="ind"><div class="ind-head"><span class="ind-label">'+esc(i.label)+'</span>'
+/* ---------- piezas compartidas con "Mi mes" (finance.js) ---------- */
+function scoreHeroHTML(label,score,level,note){
+  const st=scoreStatus(score);
+  return '<section class="hero-health">'
+    +'<div><div class="hero-label">'+esc(label)+'</div>'
+    +'<div class="hero-num">'+(score==null?'—':score)+'<span>/100</span></div>'
+    +'<div class="status-chip '+st+'"><span aria-hidden="true">'+STATUS[st].icon+'</span>'+esc(level)+'</div></div>'
+    +'<div class="meter" role="img" aria-label="Índice '+(score==null?'sin datos':score+' de 100')+'">'
+    +'<div class="meter-fill '+st+'" style="width:'+(score||0)+'%"></div></div>'
+    +'<p class="small">'+esc(note||'')+'</p></section>';
+}
+function indicatorsHTML(list){
+  return '<div class="ind-grid">'+list.map(i=>{const s=STATUS[i.status];
+    return '<article class="ind"><div class="ind-head"><span class="ind-label">'+esc(i.label)+'</span>'
       +'<span class="status-chip '+i.status+'"><span aria-hidden="true">'+s.icon+'</span>'+s.text+'</span></div>'
-      +'<div class="ind-value">'+esc(i.display)+'</div><p class="small">'+esc(i.detail)+'</p></article>';
-  }
-  h+='</div>';
+      +'<div class="ind-value">'+esc(i.display)+'</div><p class="small">'+esc(i.detail)+'</p></article>';}).join('')+'</div>';
+}
+function recsHTML(recs){
+  return recs.length?'<div class="block"><h2>Qué puedes hacer</h2><ol class="recs">'+recs.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ol></div>':'';
+}
 
-  if(r.recommendations.length){
-    h+='<div class="block"><h2>Qué puedes hacer</h2><ol class="recs">'+r.recommendations.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ol></div>';
-  }
+function renderHealth(r){
+  let h=scoreHeroHTML('Índice de salud crediticia',r.score,r.level,r.notes[0]);
+  h+=indicatorsHTML(r.indicators);
+  h+=recsHTML(r.recommendations);
 
   h+='<div class="grid2"><div class="block"><h2>Uso del crédito por mes</h2><div class="chart" id="ch-util"></div></div>'
     +'<div class="block"><h2>Saldo por mes</h2><p class="small">Pago para no generar intereses al cierre de cada periodo.</p><div class="chart" id="ch-bal"></div></div></div>';

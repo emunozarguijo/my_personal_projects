@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections import defaultdict
 from decimal import Decimal
 
+from app.core.formatting import dmy, money
 from app.schemas import Chunk, ParsedStatement, Transaction, TransactionKind
 from app.services.categorizer import summarize_categories
 
@@ -20,17 +21,6 @@ KIND_LABEL = {
     TransactionKind.INSTALLMENT: "mensualidad a meses",
     TransactionKind.OTHER: "otro",
 }
-
-
-def money(value: Decimal | None) -> str:
-    if value is None:
-        return "N/D"
-    sign = "-" if value < 0 else ""
-    return f"{sign}${abs(value):,.2f}"
-
-
-def dmy(d) -> str:
-    return d.strftime("%d/%m/%Y") if d else "N/D"
 
 
 class StatementChunker:

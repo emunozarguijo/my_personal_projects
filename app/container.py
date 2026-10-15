@@ -1,6 +1,7 @@
 """Composition root: aquí (y solo aquí) se crean y conectan las dependencias."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.core.config import Settings, get_settings
@@ -16,7 +17,7 @@ from app.services.credit_health import build_report, report_to_text
 from app.services.embeddings import EmbeddingService, build_provider
 from app.services.finance import FinanceService, summary_to_text
 from app.services.llm import LLMService, build_llm_provider
-from app.services.metrics import MetricsService
+from app.services.metrics import BackgroundMetricsSink, MetricsService
 from app.services.pdf_parser import PdfTextExtractor
 from app.services.repository import FinanceRepository, MetricsRepository, StatementRepository, UserRepository
 from app.services.retrieval import Retriever
@@ -43,6 +44,7 @@ class AppServices:
     assistant: StatementAssistant
     auth: AuthService
     finance: FinanceService | None = None
+    close: Callable[[], None] | None = None  # se llama al apagar la app (escribe métricas pendientes)
 
 
 def build_services(settings: Settings | None = None, check_db: bool = True) -> AppServices:
@@ -57,7 +59,8 @@ def build_services(settings: Settings | None = None, check_db: bool = True) -> A
 
     statements = StatementRepository(db)
     metrics_repo = MetricsRepository(db)
-    metrics = MetricsService(metrics_repo, settings)
+    metrics_sink = BackgroundMetricsSink(metrics_repo)  # escribe en segundo plano: no retrasa respuestas
+    metrics = MetricsService(metrics_sink, settings)
 
     embeddings = EmbeddingService(build_provider(settings), metrics)
     llm = LLMService(build_llm_provider(settings), metrics)
@@ -75,8 +78,9 @@ def build_services(settings: Settings | None = None, check_db: bool = True) -> A
     finance = FinanceService(FinanceRepository(db), statements, settings.max_manual_entries_per_day)
 
     def insights(user_id: int, statement_id: int | None) -> str:
-        credit = report_to_text(build_report(statements.list_statement_details(user_id), statement_id))
-        return f"{credit}\n\n{summary_to_text(finance.month(user_id))}"
+        details = statements.list_statement_details(user_id)  # una sola carga para los dos reportes
+        credit = report_to_text(build_report(details, statement_id))
+        return f"{credit}\n\n{summary_to_text(finance.month(user_id, statements=details))}"
 
     assistant = StatementAssistant(
         ingestion_graph=build_ingestion_graph(ingestion_nodes),
@@ -98,4 +102,4 @@ def build_services(settings: Settings | None = None, check_db: bool = True) -> A
         invite_code=invite or None,
         max_users=settings.max_users,
     )
-    return AppServices(assistant=assistant, auth=auth, finance=finance)
+    return AppServices(assistant=assistant, auth=auth, finance=finance, close=metrics_sink.close)

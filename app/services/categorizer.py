@@ -19,6 +19,7 @@ from collections import defaultdict
 from decimal import Decimal
 from typing import Protocol
 
+from app.core.formatting import pct
 from app.schemas import CategoryTotal, Transaction, TransactionKind
 from app.services.metrics import MetricsService, Stopwatch
 
@@ -86,7 +87,7 @@ def summarize_categories(transactions: list[Transaction]) -> list[CategoryTotal]
     return [
         CategoryTotal(
             category=cat, label=CATEGORIES[cat], amount=amount, count=counts[cat],
-            share=float(amount / grand * 100) if grand else 0.0,
+            share=pct(amount, grand),
             essential=cat in ESSENTIAL, deductible=cat in DEDUCTIBLE,
         )  # fmt: skip
         for cat, amount in sorted(totals.items(), key=lambda kv: kv[1], reverse=True)

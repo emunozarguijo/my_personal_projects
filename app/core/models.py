@@ -124,6 +124,7 @@ class TransactionRow(Base):
     currency: Mapped[str] = mapped_column(String(3), default="MXN")
     category: Mapped[str | None] = mapped_column(String(30))
     category_source: Mapped[str | None] = mapped_column(String(10))
+    merchant_key: Mapped[str | None] = mapped_column(String(120), index=True)  # comercio normalizado
 
     statement: Mapped[Statement] = relationship(back_populates="transactions")
 

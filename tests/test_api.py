@@ -297,3 +297,18 @@ def test_assets_are_versioned_by_content(app, monkeypatch):
         assert '/static/js/helpers.js"' not in html          # ninguno sin versión
         monkeypatch.setattr(api_module, "assets_version", lambda: "0123456789")
         assert "/static/js/finance.js?v=0123456789" in c.get("/").text   # cambia cuando cambian los archivos
+
+
+def test_assets_version_is_cached_until_a_file_changes(monkeypatch, tmp_path):
+    import app.api as api_module
+
+    (tmp_path / "a.js").write_text("uno", encoding="utf-8")
+    monkeypatch.setattr(api_module, "FRONTEND_DIR", tmp_path)
+    api_module._assets_cache.clear()
+    reads = []
+    original = type(tmp_path).read_bytes
+    monkeypatch.setattr(type(tmp_path), "read_bytes", lambda self: reads.append(self.name) or original(self))
+    v1 = api_module.assets_version()
+    assert api_module.assets_version() == v1 and reads == ["a.js"]          # segunda vez: sin volver a leer
+    (tmp_path / "a.js").write_text("dos, más largo", encoding="utf-8")
+    assert api_module.assets_version() != v1                                 # cambió el archivo → nueva huella
