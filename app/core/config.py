@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     max_statements_per_user: int = 24
     max_asks_per_day: int = 30
     max_uploads_per_day: int = 10
+    max_manual_entries_per_day: int = 200   # ingresos + gastos en efectivo registrados a mano
 
     @property
     def is_prod(self) -> bool:

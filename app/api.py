@@ -10,6 +10,7 @@ FastAPI los ejecuta en un pool de hilos sin congelar el servidor.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import shutil
 from collections.abc import Callable
@@ -20,7 +21,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -31,7 +32,10 @@ from app.schemas import (
     ApiCallRecord,
     AskResult,
     CreditHealthReport,
+    CashExpenseItem,
+    IncomeItem,
     IngestResult,
+    MonthlySummary,
     OperationStats,
     StatementDetail,
     StatementSummary,
@@ -40,6 +44,7 @@ from app.schemas import (
 )
 from app.services.assistant import NOT_FOUND, StatementAssistant
 from app.services.categorizer import CATEGORIES, DEDUCTIBLE, ESSENTIAL, UNCLASSIFIED
+from app.services.finance import CashExpenseIn, CashExpenseUpdate, FinanceService, IncomeIn, IncomeUpdate
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 SESSION_COOKIE = "session"
@@ -55,6 +60,10 @@ def get_services(request: Request) -> AppServices:
 
 def get_assistant(services: AppServices = Depends(get_services)) -> StatementAssistant:
     return services.assistant
+
+
+def get_finance(services: AppServices = Depends(get_services)) -> FinanceService:
+    return services.finance
 
 
 def _set_session_cookie(response: Response, settings: Settings, token: str) -> None:
@@ -150,9 +159,24 @@ def change_password(body: ChangePasswordRequest, request: Request, user: UserAcc
 
 
 # ------------------------------------------------------------------ páginas
+_ASSET_RE = re.compile(r'(/static/[^"?]+\.(?:js|css))"')
+
+
+def assets_version() -> str:
+    """Huella de los archivos del frontend: cambia en cuanto cambia cualquiera de ellos."""
+    digest = hashlib.sha256()
+    for path in sorted(FRONTEND_DIR.rglob("*")):
+        if path.suffix in (".js", ".css"):
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:10]
+
+
 @router.get("/", include_in_schema=False)
-def home() -> FileResponse:
-    return FileResponse(FRONTEND_DIR / "index.html")
+def home() -> HTMLResponse:
+    # Cada versión de los .js/.css tiene su propia URL (?v=huella): el navegador nunca mezcla un archivo viejo
+    # guardado en caché con uno nuevo, aunque los haya guardado antes de que existiera Cache-Control.
+    html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
+    return HTMLResponse(_ASSET_RE.sub(rf'\1?v={assets_version()}"', html))
 
 
 @router.get("/health")
@@ -257,6 +281,75 @@ def set_category(transaction_id: int, body: CategoryUpdate, user: UserAccount = 
     return {"updated": changed, "category": body.category}
 
 
+# ------------------------------------------------------------------ finanzas del mes (registro manual)
+def _bad_input(exc: ValueError) -> HTTPException:
+    return HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/finance/month", response_model=MonthlySummary)
+def finance_month(month: str | None = None, user: UserAccount = Depends(current_user),
+                  finance: FinanceService = Depends(get_finance)):  # fmt: skip
+    try:
+        return finance.month(user.id, month)
+    except ValueError as exc:
+        raise _bad_input(exc) from exc
+
+
+@router.post("/incomes", response_model=IncomeItem, status_code=201)
+def add_income(body: IncomeIn, user: UserAccount = Depends(current_user), finance: FinanceService = Depends(get_finance)):
+    try:
+        return finance.add_income(user.id, body)
+    except ValueError as exc:
+        raise _bad_input(exc) from exc
+
+
+@router.patch("/incomes/{income_id}", response_model=IncomeItem)
+def update_income(income_id: int, body: IncomeUpdate, user: UserAccount = Depends(current_user),
+                  finance: FinanceService = Depends(get_finance)):  # fmt: skip
+    try:
+        item = finance.update_income(user.id, income_id, body)
+    except ValueError as exc:
+        raise _bad_input(exc) from exc
+    if item is None:
+        raise HTTPException(status_code=404, detail="Ese ingreso no existe.")
+    return item
+
+
+@router.delete("/incomes/{income_id}", status_code=204)
+def delete_income(income_id: int, user: UserAccount = Depends(current_user),
+                  finance: FinanceService = Depends(get_finance)) -> None:  # fmt: skip
+    if not finance.delete_income(user.id, income_id):
+        raise HTTPException(status_code=404, detail="Ese ingreso no existe.")
+
+
+@router.post("/cash-expenses", response_model=CashExpenseItem, status_code=201)
+def add_cash_expense(body: CashExpenseIn, user: UserAccount = Depends(current_user),
+                     finance: FinanceService = Depends(get_finance)):  # fmt: skip
+    try:
+        return finance.add_cash_expense(user.id, body)
+    except ValueError as exc:
+        raise _bad_input(exc) from exc
+
+
+@router.patch("/cash-expenses/{expense_id}", response_model=CashExpenseItem)
+def update_cash_expense(expense_id: int, body: CashExpenseUpdate, user: UserAccount = Depends(current_user),
+                        finance: FinanceService = Depends(get_finance)):  # fmt: skip
+    try:
+        item = finance.update_cash_expense(user.id, expense_id, body)
+    except ValueError as exc:
+        raise _bad_input(exc) from exc
+    if item is None:
+        raise HTTPException(status_code=404, detail="Ese gasto no existe.")
+    return item
+
+
+@router.delete("/cash-expenses/{expense_id}", status_code=204)
+def delete_cash_expense(expense_id: int, user: UserAccount = Depends(current_user),
+                        finance: FinanceService = Depends(get_finance)) -> None:  # fmt: skip
+    if not finance.delete_cash_expense(user.id, expense_id):
+        raise HTTPException(status_code=404, detail="Ese gasto no existe.")
+
+
 # ------------------------------------------------------------------ preguntas y métricas
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
@@ -328,6 +421,15 @@ def create_app(
             if origin and urlsplit(origin).netloc != request.headers.get("host"):
                 return JSONResponse({"detail": "Origen no permitido."}, status_code=403)
         return await call_next(request)
+
+    @app.middleware("http")
+    async def revalidate_frontend(request: Request, call_next):
+        # Sin esto el navegador puede reutilizar un helpers.js viejo junto con un finance.js nuevo tras un deploy.
+        # no-cache = revalidar siempre (ETag → 304 si no cambió), no "no guardar".
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     @app.exception_handler(QuotaExceededError)
     @app.exception_handler(RateLimitedError)

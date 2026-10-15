@@ -1,6 +1,6 @@
 // Lógica de la interfaz: estado, llamadas a la API y renderizado de vistas.
 const $=s=>document.querySelector(s);
-const state={statements:[],selected:null,detail:null,tab:'salud',filter:'all',cat:'',q:'',chats:{},busy:false,categories:[]};
+const state={statements:[],selected:null,detail:null,tab:'mes',filter:'all',cat:'',q:'',chats:{},busy:false,categories:[]};
 
 async function api(path,opts){
   const r=await fetch(path,opts);
@@ -56,6 +56,7 @@ async function select(id,keepTab){
   state.filter='all';state.cat='';state.q='';
   renderHeader();renderResumen();renderTx();renderChat();
   if(state.tab==='salud')loadHealth();
+  if(state.tab==='mes')loadMonth();
   if(!keepTab)setTab(state.tab);
 }
 function renderHeader(){
@@ -181,7 +182,7 @@ function renderTx(){
       return '<button class="chip" type="button" data-f="'+f[0]+'" aria-pressed="'+(state.filter===f[0])+'">'+f[1]+'<small>'+n+'</small></button>';
     }).join('')
     +'<select class="search" id="catf" aria-label="Filtrar por categoría"><option value="">Todas las categorías</option>'
-    +[...state.categories,{key:'sin_clasificar',label:'Sin clasificar'}].map(c=>'<option value="'+c.key+'"'+(state.cat===c.key?' selected':'')+'>'+esc(c.label)+'</option>').join('')+'</select>'
+    +catOptions(state.cat)+'<option value="sin_clasificar"'+(state.cat==='sin_clasificar'?' selected':'')+'>❔ Sin clasificar</option></select>'
     +'<input class="search" id="search" type="search" placeholder="Buscar comercio" aria-label="Buscar comercio" value="'+esc(state.q)+'"></div>';
   h+='<div class="tx-wrap"><table><thead><tr><th>Fecha</th><th>Descripción</th><th>Tipo</th><th>Categoría</th><th class="r">Monto</th></tr></thead><tbody>';
   if(!rows.length)h+='<tr><td colspan="5" class="small">No hay movimientos con ese filtro.</td></tr>';
@@ -200,9 +201,8 @@ function renderTx(){
 $('#v-movimientos').addEventListener('click',e=>{const c=e.target.closest('.chip');if(c){state.filter=c.dataset.f;renderTx();}});
 function catCell(t){
   if(t.kind!=='purchase'||t.id==null)return '';
-  const opts=(t.category==='sin_clasificar'||!t.category?'<option value="" selected>Sin clasificar</option>':'')
-    +state.categories.map(c=>'<option value="'+c.key+'"'+(t.category===c.key?' selected':'')+'>'+esc(c.label)+'</option>').join('');
-  return '<select class="cat-select" data-tx="'+t.id+'" aria-label="Categoría de '+esc(t.description)+'">'+opts+'</select>'
+  const opts=(t.category==='sin_clasificar'||!t.category?'<option value="" selected>❔ Sin clasificar</option>':'')+catOptions(t.category);
+  return '<span class="cat-cell">'+catBadge(t.category||'sin_clasificar')+'<select class="cat-select" data-tx="'+t.id+'" aria-label="Categoría de '+esc(t.description)+'">'+opts+'</select></span>'
     +(t.deductible?'<span class="tag">posible deducible</span>':'');
 }
 $('#v-movimientos').addEventListener('change',async e=>{
@@ -293,7 +293,9 @@ async function loadMetrics(){
 function setTab(name){
   state.tab=name;
   document.querySelectorAll('.tab').forEach(t=>t.setAttribute('aria-selected',String(t.dataset.tab===name)));
-  for(const t of ['salud','resumen','movimientos','preguntar','metricas'])$('#v-'+t).hidden=t!==name;
+  for(const t of ['mes','salud','resumen','movimientos','preguntar','metricas'])$('#v-'+t).hidden=t!==name;
+  $('#shell').classList.toggle('on-mes',name==='mes');
+  if(name==='mes')loadMonth();
   if(name==='metricas')loadMetrics();
   if(name==='salud')loadHealth();
   if(name==='preguntar'){const c=$('#chat');c.scrollTop=c.scrollHeight;$('#q').focus();}
@@ -322,6 +324,7 @@ async function uploadFiles(files){
 const fileInput=$('#file');
 $('#drop').addEventListener('click',()=>fileInput.click());
 $('#welcome-btn').addEventListener('click',()=>fileInput.click());
+$('#welcome-mes').addEventListener('click',()=>setTab('mes'));
 fileInput.addEventListener('change',()=>{if(fileInput.files.length)uploadFiles(fileInput.files);fileInput.value='';});
 const drop=$('#drop');
 ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over');}));

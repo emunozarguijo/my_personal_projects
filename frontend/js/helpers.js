@@ -52,3 +52,10 @@ function buildHistory(chat){
   }
   return h;
 }
+
+// Íconos de categoría de gasto (una sola fuente para toda la interfaz). Son decorativos: el texto siempre acompaña.
+const CAT_ICON={salud:'🩺',educacion:'🎓',hogar:'🏠',entretenimiento:'🎬',alimentos:'🍽️',supermercado:'🛒',
+  ropa_cuidado:'👕',transporte:'🚌',servicios:'💡',otros:'📦',sin_clasificar:'❔'};
+function catIcon(k){return CAT_ICON[k]||'❔';}
+function catBadge(k){return '<span class="cat-ico" aria-hidden="true">'+catIcon(k)+'</span>';}
+function catOptions(selected){return state.categories.map(c=>'<option value="'+c.key+'"'+(selected===c.key?' selected':'')+'>'+catIcon(c.key)+' '+esc(c.label)+'</option>').join('');}

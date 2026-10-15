@@ -44,21 +44,29 @@ UNCLASSIFIED = "sin_clasificar"
 # Patrones sobre el nombre normalizado (minúsculas, sin acentos). El orden importa: el primero gana.
 _RULES: list[tuple[str, str]] = [
     ("salud", r"farmacia|farmacias|similares|benavides|san pablo|del ahorro|hospital|clinica|medic|"
-              r"laborator|chopo|salud digna|optic|dentist|dental|doctor|consultorio|veterinari"),
+              r"laborator|chopo|salud digna|optic|dentist|dental|doctor|consultorio|veterinari|medicina|consulta|"
+              r"analisis clinic|lentes"),
     ("educacion", r"colegiatura|escuela|colegio|universidad|unam|itesm|tec de monterrey|udemy|coursera|platzi|"
-                  r"duolingo|libreria|gandhi|sanborns libros|papeleria|instituto"),
+                  r"duolingo|libreria|gandhi|sanborns libros|instituto|inscripcion|utiles escolares"),
     ("supermercado", r"walmart|bodega aurrera|aurrera|soriana|chedraui|la comer|fresko|city market|superama|"
-                     r"heb|costco|sams|sam s club|mega comercial|oxxo|7 eleven|seven eleven|circle k"),
+                     r"heb|costco|sams|sam s club|mega comercial|oxxo|7 eleven|seven eleven|circle k|"
+                     # palabras de uso diario (gastos en efectivo); "mercado libre" es Hogar
+                     r"mercado(?! ?libre)|tianguis|tortill|abarrotes|verduler|fruteria|carniceria|polleria|"
+                     r"panaderia|pan$|bolillo|despensa|supermercado|super$|el super"),
     ("transporte", r"uber(?! eats)|didi(?! food)|cabify|pemex|gasolin|gas station|oxxo gas|bp |shell|mobil|"
-                   r"autobus|ado |metro |metrobus|tag |iave|pase |televia|estacionamiento|aeromexico|volaris|viva aerobus"),
+                   r"autobus|ado |metro |metrobus|tag |iave|pase |televia|estacionamiento|aeromexico|volaris|viva aerobus|"
+                   r"taxi|camion|combi|micro |pasaje|caseta|gasolina|uber$|didi$"),
     ("alimentos", r"uber eats|didi food|rappi|restaurant|restaurante|panda express|starbucks|mcdonald|burger|kfc|"
-                  r"domino|pizza|taco|sushi|cafe|cafeteria|vips|toks|sanborns|italianni|wings|carl s jr|subway"),
+                  r"domino|pizza|taco|sushi|cafe|cafeteria|vips|toks|sanborns|italianni|wings|carl s jr|subway|"
+                  r"comida|desayuno|almuerzo|cena|torta|antojit|fonda|cocina economica|garnacha|helado|nieve"),
     ("servicios", r"apple\.com|apple com|google|microsoft|amazon prime|telcel|at t|movistar|izzi|totalplay|"
-                  r"megacable|telmex|infinitum|cfe|naturgy|sacmex|siapa|agua y drenaje|gas natural|icloud|openai|anthropic|chatgpt"),
+                  r"megacable|telmex|infinitum|cfe|naturgy|sacmex|siapa|agua y drenaje|gas natural|icloud|openai|anthropic|chatgpt|"
+                  r"recibo de luz|luz$|pago de luz|gas lp|pipa de gas|tanque de gas|garrafon|recarga|internet|telefono|predial"),
     ("entretenimiento", r"netflix|spotify|disney|hbo|max com|prime video|paramount|youtube|cinepolis|cinemex|"
                         r"ticketmaster|steam|playstation|xbox|nintendo|crunchyroll|vix"),
     ("hogar", r"home depot|liverpool|sears|coppel|elektra|ikea|the home store|comex|mueble|"
-              r"ferreteria|bed bath|best buy|office depot|mercado libre|mercadolibre|amazon"),
+              r"ferreteria|bed bath|best buy|office depot|mercado libre|mercadolibre|amazon|"
+              r"renta|lavanderia|tintoreria|plomero|electricista|limpieza|jardiner|papeleria"),
     ("ropa_cuidado", r"c a |c&a|zara|bershka|pull bear|h m|h&m|shasa|suburbia|innova sport|marti|nike|adidas|"
                      r"sephora|ulta|estetica|barberia|salon|perfum|zapater|price shoes|boutique|bout "),
 ]

@@ -50,7 +50,7 @@ function renderHealth(r){
   const max=Math.max(...r.categories.map(c=>Number(c.amount)),1);
   for(const c of r.categories){
     const w=Math.max(Number(c.amount)/max*100,1.5);
-    h+='<div class="cat-row" title="'+esc(c.label)+': '+c.count+' compra(s)"><span class="cat-name">'+esc(c.label)
+    h+='<div class="cat-row" title="'+esc(c.label)+': '+c.count+' compra(s)"><span class="cat-name">'+catBadge(c.category)+esc(c.label)
       +(c.deductible?' <span class="tag">posible deducible</span>':'')+'</span>'
       +'<span class="cat-track"><span class="cat-bar'+(c.category==='sin_clasificar'?' muted':'')+'" style="width:'+w+'%"></span>'
       +'<span class="cat-val">'+money(c.amount)+' <small>'+pctRound(c.share)+'</small></span></span></div>';
